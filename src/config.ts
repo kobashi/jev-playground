@@ -1,5 +1,7 @@
 import type { LogLevel } from "@typesafe-ai/sdk";
 
+/** Read a trimmed environment value, treating blank as unset. */
+
 /** Resolved settings for the Jev client, read from the environment. */
 export interface JevConfig {
   apiKey: string;
@@ -16,7 +18,7 @@ export class ConfigError extends Error {
 
 const LOG_LEVELS = ["debug", "info", "warn", "error", "off"] as const;
 
-const readOptional = (name: string): string | undefined => {
+export const readOptional = (name: string): string | undefined => {
   const value = process.env[name]?.trim();
   return value === undefined || value === "" ? undefined : value;
 };

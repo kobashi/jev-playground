@@ -22,7 +22,6 @@
     "src",
     "scripts",
     "test",
-    "functions",
     "vitest.config.ts"
   ]
 }

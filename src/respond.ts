@@ -6,7 +6,8 @@
  * single round trip. Arithmetic the client can do for itself — note counts,
  * range, contour — is deliberately not asked; only judgments are.
  */
-import { choice, noul, type Questions, type SystemOneResult, type TypeSafeClient } from "@typesafe-ai/sdk";
+import { choice, noul, type Questions } from "@typesafe-ai/sdk";
+import type { SystemOneCaller } from "./proxy-client.js";
 
 /** A note as the app models it: a scale degree, and a position and length in beats. */
 export interface Note {
@@ -159,14 +160,14 @@ export const buildState = (req: RespondRequest) => ({
 
 /** Validate, ask Jev once, and hand back the raw answers. */
 export const handleRespond = async (
-  client: Pick<TypeSafeClient, "systemOne">,
+  client: SystemOneCaller,
   body: unknown,
 ): Promise<RespondResult> => {
   const req = parseRequest(body);
-  const result = (await client.systemOne({
+  const result = await client.systemOne({
     state: buildState(req),
     questions: buildQuestions(req),
-  })) as SystemOneResult<Questions>;
+  });
 
   return {
     model: result.model,

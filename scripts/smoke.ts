@@ -1,11 +1,12 @@
 /**
- * Live check that the API key, network path and model route all work.
+ * Live check that Jev is reachable and answering.
  *
- * Run with `npm run smoke`. It issues one billable request.
+ * Works either way round: with TYPESAFE_API_KEY in the environment it uses the
+ * SDK, and without one it sends unauthenticated and lets an agent proxy attach
+ * the credential. It issues one billable request.
  */
 import { choice, noul, score } from "@typesafe-ai/sdk";
-import { createJevClient } from "../src/client.js";
-import { ConfigError } from "../src/config.js";
+import { createCaller } from "../src/proxy-client.js";
 
 const state = {
   ticket: "I was charged twice for the same order and nobody has replied in three days.",
@@ -13,7 +14,10 @@ const state = {
 };
 
 const main = async (): Promise<void> => {
-  const client = createJevClient();
+  const { client, mode } = createCaller();
+  console.log(mode === "key"
+    ? "auth: TYPESAFE_API_KEY from this environment"
+    : "auth: none sent — expecting an agent proxy to attach the credential");
 
   const startedAt = performance.now();
   const { model, answers, usage } = await client.systemOne({
@@ -39,22 +43,14 @@ const main = async (): Promise<void> => {
   const elapsedMs = Math.round(performance.now() - startedAt);
 
   console.log(`model: ${model}  latency: ${elapsedMs}ms`);
-  console.log(
-    `category: ${answers.category.choice} (confidence ${answers.category.confidence.toFixed(3)})`,
-  );
+  console.log(`category: ${answers.category.choice} (confidence ${answers.category.confidence.toFixed(3)})`);
   console.log(`  probabilities: ${JSON.stringify(answers.category.probabilities)}`);
-  console.log(
-    `urgency: ${answers.urgency.score.toFixed(2)} (confidence ${answers.urgency.confidence.toFixed(3)})`,
-  );
+  console.log(`urgency: ${answers.urgency.score.toFixed(2)} (confidence ${answers.urgency.confidence.toFixed(3)})`);
   console.log(`needs_human: p(yes) = ${answers.needs_human.noul.toFixed(3)}`);
   console.log(`usage: ${usage.input_tokens} in / ${usage.output_tokens} out`);
 };
 
 main().catch((error: unknown) => {
-  if (error instanceof ConfigError) {
-    console.error(error.message);
-  } else {
-    console.error(error);
-  }
+  console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
 });

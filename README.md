@@ -5,8 +5,9 @@ model. Jev does not generate text: it takes a block of state and a set of typed
 questions, evaluates them in parallel, and returns values drawn only from the schema
 you defined, each with calibrated probabilities and a confidence.
 
-This repository holds the app, the Jev client plumbing, a live smoke check, and the
-tests that cover them. The app runs today; the Jev calls are not wired in yet.
+This repository holds the app, the Jev client plumbing, the local server that
+keeps the key out of the browser, a live smoke check, and the tests that cover
+them. It runs privately on loopback and is not deployed anywhere.
 
 ## The app
 
@@ -16,11 +17,14 @@ Web Audio for sound, Web MIDI when a device is present, and a computer keyboard
 or on-screen pads otherwise.
 
 ```sh
-python3 -m http.server 5173 --directory web   # then open http://localhost:5173
+npm install
+npm run serve        # http://127.0.0.1:5173
 ```
 
-Opening `web/index.html` directly works too, but Web MIDI needs `localhost` or
-HTTPS, so the server is the better path when a controller is plugged in.
+`npm run serve` serves the page and the one endpoint it calls, bound to
+127.0.0.1 only. Opening `web/index.html` as a file works too, but then only the
+local engine does — a Jev seat needs the endpoint, and Web MIDI needs
+`localhost` or HTTPS.
 
 ### Timing
 
@@ -98,124 +102,49 @@ reason (worst case 17 iterations, 16 engine calls), and a real local-vs-local
 session in Chromium that ran to the 16-exchange cap and stopped by itself with
 no page errors.
 
-## Publishing
+## Running it privately
 
-The deciding constraint is that the Jev API key cannot reach the browser. That
-rules out a static-only host once Jev is wired in.
+This is not deployed anywhere and is not meant to be. The deciding constraint is
+that the Jev API key cannot reach the browser, so a seat set to Jev needs
+something server side; `npm run serve` is that something, on loopback.
 
-| Target | Works? | Why |
+**`/api/respond` has no authentication.** On loopback that is fine. Exposed, it
+would let anyone spend the account's Jev budget — at roughly 3 KB of JSON per
+call, a trial balance goes quickly. Do not put this behind a tunnel or a public
+port without putting real access control in front of it first.
+
+### Where the key lives
+
+`createCaller()` picks a route from what the environment offers, and says which
+one it took at startup:
+
+| Route | When | How it authenticates |
 | --- | --- | --- |
-| Cloudflare Pages + Functions | Yes | `functions/api/respond.ts` holds the key as a secret binding; `web/` is served as static assets. |
-| GitHub Pages | Only without Jev | No server side, so the key would have to be typed in by each visitor. |
-| Claude Artifact | Only without Jev | No secret storage, and its CSP blocks calls to the API. Good for the skeleton. |
+| `key` | `TYPESAFE_API_KEY` is set | the SDK sends `Authorization: Bearer …` |
+| `proxy` | no key present | nothing is sent; an agent proxy attaches the credential after the request leaves |
 
-The local engine needs none of that, so the page runs anywhere today; choosing
-a Jev seat on a host without the function shows the failure and falls back.
+The proxy route exists for Claude Code cloud environments, which can hold an
+API credential that never enters the sandbox. Sending a placeholder
+`Authorization` header there risks colliding with the one the proxy adds, so
+`createProxyClient` deliberately sends none — and a test asserts that.
+
+On a development machine, put the key in `.env` instead (it is gitignored):
 
 ```sh
-npx wrangler pages secret put TYPESAFE_API_KEY
-npm run deploy
+cp .env.example .env     # then fill in TYPESAFE_API_KEY
+npm run serve
 ```
 
-`npm run dev:web` serves the page and the function together for local work.
+### What has been verified
 
-**The endpoint is unauthenticated.** Anyone who can reach a public deployment
-can spend the account's Jev budget through it. Request size is capped — 64 notes
-per phrase, 24 candidates — and the questions are built server side so callers
-cannot supply their own, but that bounds each call rather than the number of
-them. Put access control or a rate limit in front of it before handing the URL
-out.
+`npm run check` covers 44 tests: payload validation, the questions built from
+it, the proxy client's headers, and the server's routes and failure paths.
 
-Neither the function nor the deployment has been run: there is no API key and
-no Cloudflare account in the environment this was written in. `src/respond.ts`
-is covered by tests against an injected fetch, so the request it builds is
-verified; the deploy itself is not.
+Beyond that, the whole chain has been run end to end against a stand-in for
+`api.typesafe.ai`: the real server in proxy mode, the real page in Chromium with
+a Jev seat, one request reaching the upstream on `/v1/systemone` carrying four
+questions and fourteen candidates, **no `Authorization` header on it**, and the
+answer arriving back in the readout with the upstream's token count.
 
-## Setup
-
-Node.js 22 or newer.
-
-```sh
-npm install
-cp .env.example .env   # then fill in TYPESAFE_API_KEY
-```
-
-The key comes from the TypeSafe console; Jev is in early access behind a waitlist as
-of September 2026, so an account may not have one yet. Everything but `npm run smoke`
-works without a key.
-
-## Scripts
-
-| Script | What it does |
-| --- | --- |
-| `npm run check` | Typecheck, then run the tests. |
-| `npm run typecheck` | `tsc --noEmit`. |
-| `npm test` | Unit tests. No network, no API key. |
-| `npm run smoke` | One real request against the API. Billable. |
-
-`npm run smoke` loads `.env` if present and prints the answers, the per-label
-probabilities, the latency, and the token usage.
-
-## Layout
-
-```
-src/config.ts    Environment settings, validated at startup
-src/client.ts    createJevClient() — the configured TypeSafeClient
-src/index.ts     Public surface, re-exporting the SDK's question builders
-scripts/smoke.ts Live check against the API
-test/            Unit tests driven by an injected fetch
-```
-
-`createJevClient` accepts the SDK's own client options as overrides, so passing
-`{ fetch }` drives it from a test double instead of the network. That is how the
-tests run without a key.
-
-## The three question types
-
-Every question carries `instructions` (text, a JSON object, an array, or `null`) and
-`criteria` describing the outcomes. `null` leaves an outcome undescribed.
-
-```ts
-import { choice, noul, score } from "@typesafe-ai/sdk";
-
-choice("What is this ticket about?", {   // one of N labels, up to 255
-  billing: "Charges, refunds, invoices, or subscriptions.",
-  technical: "The product is broken.",
-  other: null,
-});
-
-score("How urgent is this?", [           // a 2–10 level ordered rubric, indexed from 0
-  "Can wait a week.",
-  "Should be handled today.",
-  "Needs someone right now.",
-]);
-
-noul("Does this need a human?", {        // yes/no, returned as a probability
-  true: "A person must read it first.",
-  false: "An automated reply would resolve it.",
-});
-```
-
-Answers come back keyed by question name, typed from the question that produced them:
-`choice` yields the selected label plus `probabilities` and `confidence`, `score`
-yields an expected value that may fall between rubric levels plus its `legend`, and
-`noul` yields `noul`, the probability of yes.
-
-## Configuration
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `TYPESAFE_API_KEY` | — | Required. |
-| `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | Model route. |
-| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | API root. |
-| `TYPESAFE_LOG_LEVEL` | `warn` | `debug` logs request bodies, which include your state. |
-| `JEV_TIMEOUT_MS` | `10000` | Per-attempt timeout. The SDK retries twice by default. |
-
-`loadConfig()` rejects a missing key, an unknown log level, and a non-positive timeout
-at startup rather than on the first request.
-
-## Notes
-
-Output tokens are not billed, so cost tracks the size of the state you send. Sending
-one state with many questions is cheaper than one request per question, and the model
-evaluates them in parallel anyway.
+What has *not* been verified is a call to the real Jev API: this environment has
+no key.
