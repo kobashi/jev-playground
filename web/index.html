@@ -156,6 +156,11 @@ input[type="range"]{width:108px;accent-color:var(--bot-fill);background:transpar
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 .legend .k-you{background:var(--you-fill)}
 .legend .k-bot{background:var(--bot-fill)}
+.prep{
+  font-size:10.5px;font-weight:600;color:var(--bot);
+  background:var(--bot-ghost);border:1px solid color-mix(in srgb, var(--bot) 32%, transparent);
+  border-radius:99px;padding:2px 9px;white-space:nowrap;
+}
 
 .ruler{
   display:flex;flex:0 0 auto;height:17px;border-bottom:1px solid var(--line-soft);
@@ -271,6 +276,7 @@ input[type="range"]{width:108px;accent-color:var(--bot-fill);background:transpar
     <section class="roll-wrap" aria-label="ピアノロール">
       <div class="roll-head">
         <p class="status"><span class="dot" id="dot"></span><span id="status-text">パッドを押すか A〜L キーで弾いてください</span></p>
+        <span class="prep" id="prep" hidden></span>
         <p class="legend">
           <span><i class="k-you"></i>あなた</span>
           <span><i class="k-bot"></i>応答</span>
@@ -377,6 +383,7 @@ const state = {
   respStart: 4,
   totalBeats: 8,
   readout: null,
+  callAnchor: null,
   isExample: true,
 };
 
@@ -471,33 +478,78 @@ function playClick(when, accent) {
 }
 
 // ---------------------------------------------------------------------------
-// Capture and quantization
+// Transport — one clock for the whole session, so the answer lands in time
+// ---------------------------------------------------------------------------
+
+let transport = null;
+let nextClick = 0;
+
+function startTransport() {
+  const c = audio();
+  if (!c) return;
+  transport = { t0: c.currentTime, bpm: state.bpm };
+  nextClick = 0;
+}
+
+function beatNow() {
+  if (!ctx || !transport) return 0;
+  return (ctx.currentTime - transport.t0) * transport.bpm / 60;
+}
+
+function beatToTime(b) {
+  return transport.t0 + b * 60 / transport.bpm;
+}
+
+/** Change tempo without moving the beat the player is currently on. */
+function setBpm(bpm) {
+  if (transport && ctx) {
+    const b = beatNow();
+    transport.t0 = ctx.currentTime - b * 60 / bpm;
+    transport.bpm = bpm;
+    nextClick = Math.ceil(beatNow());
+  }
+  state.bpm = bpm;
+}
+
+// ---------------------------------------------------------------------------
+// Capture — onsets are transport beats, so player and answer share one grid
 // ---------------------------------------------------------------------------
 
 const held = new Map();
-let capture = [];
-let idleTimer = null;
+let events = [];
+let lastActivity = 0;
 
-const beatMs = () => 60000 / state.bpm;
-const gapMs = () => Math.max(450, beatMs() * 1.5);
+const snap = (b) => Math.round(b / GRID) * GRID;
 
-function quantize(events) {
-  if (!events.length) return [];
-  const sorted = [...events].sort((a, b) => a.onMs - b.onMs);
-  const t0 = sorted[0].onMs;
-  const ms = beatMs();
-  const notes = sorted.map((e) => {
-    const beat = Math.round(((e.onMs - t0) / ms) / GRID) * GRID;
-    const dur = Math.max(GRID, Math.round(((e.offMs - e.onMs) / ms) / GRID) * GRID);
-    return { degree: clampDeg(e.degree), beat, dur };
-  });
-  const seen = new Map();
-  for (const n of notes) {
-    const key = n.beat + ":" + n.degree;
-    const prev = seen.get(key);
-    if (!prev || n.dur > prev.dur) seen.set(key, n);
+/** Released notes plus the ones still down, so speculation sees the live phrase. */
+function currentEvents() {
+  const now = beatNow();
+  const live = [...held.entries()].map(([degree, h]) => ({
+    degree,
+    beatOn: h.beatOn,
+    beatOff: Math.max(now, h.beatOn + GRID / 2),
+  }));
+  return [...events, ...live].sort((a, b) => a.beatOn - b.beatOn);
+}
+
+/** Quantize the turn so far, and report which beat it starts on. */
+function quantizeTurn() {
+  const raw = currentEvents();
+  if (!raw.length) return { anchor: 0, notes: [] };
+  const anchor = snap(raw[0].beatOn);
+  const slots = new Map();
+  for (const e of raw) {
+    const degree = clampDeg(e.degree);
+    const beat = Math.max(0, snap(e.beatOn) - anchor);
+    const dur = Math.max(GRID, snap(e.beatOff - e.beatOn));
+    const key = beat + ":" + degree;
+    const prev = slots.get(key);
+    if (!prev || dur > prev.dur) slots.set(key, { degree, beat, dur });
   }
-  return [...seen.values()].sort((a, b) => a.beat - b.beat || a.degree - b.degree);
+  return {
+    anchor,
+    notes: [...slots.values()].sort((a, b) => a.beat - b.beat || a.degree - b.degree),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -736,9 +788,10 @@ const pct = (v) => v.toFixed(4) + "%";
 
 function layout() {
   const callLen = phraseLen(state.call);
-  const respStart = Math.max(4, Math.ceil((callLen + 0.5) / 4) * 4);
-  const end = respStart + phraseLen(state.response);
-  state.respStart = respStart;
+  if (!state.response.length) {
+    state.respStart = Math.max(4, Math.ceil((callLen + 0.5) / 4) * 4);
+  }
+  const end = Math.max(callLen, state.respStart + phraseLen(state.response));
   state.totalBeats = Math.max(8, Math.ceil(end / 4) * 4);
 }
 
@@ -864,10 +917,18 @@ function renderReadout() {
     .map((p, i) => ({ p, i }))
     .sort((a, b) => b.p - a.p)
     .slice(0, 5)
-    .forEach(({ p, i }) => {
-      const label = "候補 " + (i + 1) + " · " + cands[i].length + "音";
-      cd.appendChild(meterRow(label, p, i === idx));
-    });
+    .forEach(({ p, i }) => cd.appendChild(meterRow("候補 " + (i + 1) + " · " + cands[i].length + "音", p, i === idx)));
+}
+
+/** Show that an answer is already built and waiting for its beat. */
+function renderPrep() {
+  const el = $("#prep");
+  if (prepared && prepared.response.length) {
+    el.hidden = false;
+    el.textContent = "用意済み · " + STRATEGIES[prepared.strat.pick] + " · " + prepared.response.length + "音";
+  } else {
+    el.hidden = true;
+  }
 }
 
 function setStatus(text, mode) {
@@ -883,92 +944,171 @@ function renderAll() {
 }
 
 // ---------------------------------------------------------------------------
-// Playback
+// Speculation — the answer is built while the phrase is still being played,
+// and rebuilt on every note, so nothing is computed at the entry point.
 // ---------------------------------------------------------------------------
 
-let playRaf = 0;
+let prepared = null;
+let prepGen = 0;
+let prepTimer = 0;
 
-function stopPlayhead() {
-  cancelAnimationFrame(playRaf);
-  playRaf = 0;
-  $("#playhead").hidden = true;
+/**
+ * Resolves immediately today. A Jev call drops in here unchanged: it is already
+ * awaited, already fired mid-phrase, and already guarded against a stale reply.
+ */
+async function computeResponse(call) {
+  return respond(call);
 }
 
-function playResponse(notes) {
-  const c = audio();
-  if (!c || !notes.length) return;
-  const beat = 60 / state.bpm;
-  const t0 = c.currentTime + 0.12;
-  const span = phraseLen(notes);
+function requestSpeculation() {
+  clearTimeout(prepTimer);
+  prepTimer = setTimeout(runSpeculation, 35);
+}
 
-  for (const n of notes) {
-    playNote(degToMidi(n.degree), t0 + n.beat * beat, Math.max(0.14, n.dur * beat * 0.9), "bot");
-  }
-  if (state.metro) {
-    for (let b = 0; b < Math.ceil(span); b++) playClick(t0 + b * beat, b % 4 === 0);
-  }
+async function runSpeculation() {
+  const generation = ++prepGen;
+  const { anchor, notes } = quantizeTurn();
+  if (!notes.length) { prepared = null; renderPrep(); return; }
 
-  const ph = $("#playhead");
-  ph.hidden = false;
-  const total = state.totalBeats;
-  const tick = () => {
-    const elapsed = (c.currentTime - t0) / beat;
-    if (elapsed > span + 0.25) {
-      stopPlayhead();
-      state.phase = "idle";
-      setStatus("どうぞ、続けてください", null);
-      return;
-    }
-    const at = state.respStart + Math.max(0, elapsed);
-    ph.style.left = pct(Math.min(at, total) * 100 / total);
-    playRaf = requestAnimationFrame(tick);
+  const r = await computeResponse(notes);
+  if (generation !== prepGen) return;        // a newer note landed; this reply is stale
+
+  prepared = Object.assign({ anchor, call: notes }, r);
+  state.call = notes;
+  state.callAnchor = anchor;
+  state.readout = r;
+  state.response = [];
+  renderAll();
+  renderPrep();
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling — notes are handed to the audio clock ahead of time, never "now"
+// ---------------------------------------------------------------------------
+
+const SILENCE_BEATS = 0.5;   // half a beat of rest is enough to take the turn
+const TRADE_BEATS = 8;       // come in at the two-bar line even if they play on
+const LOOKAHEAD_S = 0.18;
+const LEAD_S = 0.09;
+
+let entry = null;
+
+function commitEntry(beat) {
+  const at = Math.ceil(beat + LEAD_S * transport.bpm / 60);
+  entry = {
+    beat: at,
+    notes: prepared.response,
+    done: new Set(),
+    endBeat: at + phraseLen(prepared.response),
   };
-  playRaf = requestAnimationFrame(tick);
+  state.call = prepared.call;
+  state.callAnchor = prepared.anchor;
+  state.response = prepared.response;
+  state.respStart = at - prepared.anchor;
+  state.readout = prepared;
+  state.phase = "responding";
+  setStatus("応答中 — " + STRATEGIES[prepared.strat.pick], "resp");
+  events = [];
+  prepared = null;
+  renderAll();
+  renderPrep();
+}
+
+function pumpNotes(beat) {
+  const horizon = beat + LOOKAHEAD_S * transport.bpm / 60;
+  const beatSec = 60 / transport.bpm;
+  entry.notes.forEach((n, i) => {
+    if (entry.done.has(i)) return;
+    const abs = entry.beat + n.beat;
+    if (abs > horizon) return;
+    entry.done.add(i);
+    const when = Math.max(ctx.currentTime + 0.004, beatToTime(abs));
+    playNote(degToMidi(n.degree), when, Math.max(0.14, n.dur * beatSec * 0.9), "bot");
+  });
+  if (beat > entry.endBeat + 0.25) {
+    entry = null;
+    state.phase = "idle";
+    setStatus("どうぞ、続けてください", null);
+  }
+}
+
+function pumpClicks(beat) {
+  if (!state.metro) { nextClick = Math.ceil(beat); return; }
+  if (nextClick < beat) nextClick = Math.ceil(beat);
+  const horizon = beat + LOOKAHEAD_S * transport.bpm / 60;
+  while (nextClick <= horizon) {
+    playClick(beatToTime(nextClick), mod(Math.round(nextClick), 4) === 0);
+    nextClick += 1;
+  }
+}
+
+function tick() {
+  if (!transport || !ctx) return;
+  const beat = beatNow();
+
+  if (state.phase === "listening" && !entry && prepared) {
+    const quiet = held.size === 0 && (beat - lastActivity) >= SILENCE_BEATS;
+    const atTradeLine = (beat - prepared.anchor) >= TRADE_BEATS;
+    if (quiet || atTradeLine) commitEntry(beat);
+  }
+
+  if (entry) pumpNotes(beat);
+  pumpClicks(beat);
+}
+
+function frame() {
+  const ph = $("#playhead");
+  const live = transport && ctx && state.callAnchor !== null &&
+               (state.phase === "listening" || entry);
+  if (live) {
+    const rel = beatNow() - state.callAnchor;
+    if (rel >= 0 && rel <= state.totalBeats) {
+      ph.hidden = false;
+      ph.style.left = pct(rel * 100 / state.totalBeats);
+    } else {
+      ph.hidden = true;
+    }
+  } else {
+    ph.hidden = true;
+  }
+  requestAnimationFrame(frame);
 }
 
 // ---------------------------------------------------------------------------
 // Turn taking
 // ---------------------------------------------------------------------------
 
-function finalize() {
-  idleTimer = null;
-  const call = quantize(capture);
-  capture = [];
-  if (call.length < 1) { state.phase = "idle"; setStatus("パッドを押すか A〜L キーで弾いてください", null); return; }
+function padFor(d) { return document.querySelector('.pad[data-deg="' + d + '"]'); }
 
+/** Clear the board for a fresh phrase, from idle, the example, or mid-answer. */
+function beginTurn() {
+  entry = null;                 // playing again yields the floor
+  prepared = null;
+  events = [];
+  state.call = [];
+  state.response = [];
+  state.readout = null;
+  state.callAnchor = null;
   state.isExample = false;
-  state.call = call;
-  const r = respond(call);
-  state.readout = r;
-  state.response = r.response;
-  state.phase = "responding";
-
+  state.phase = "listening";
   renderAll();
-  setStatus("応答中 — " + STRATEGIES[r.strat.pick], "resp");
-  playResponse(state.response);
+  renderPrep();
 }
 
 function noteOn(degree) {
   const d = clampDeg(degree);
   if (held.has(d)) return;
-  audio();
+  if (!audio()) return;
+  if (!transport) startTransport();
+  if (state.phase !== "listening") beginTurn();
 
-  if (state.phase === "responding") stopPlayhead();
-  if (state.phase !== "listening") {
-    state.phase = "listening";
-    capture = [];
-    state.call = [];
-    state.response = [];
-    state.readout = null;
-    state.isExample = false;
-    renderAll();
-    setStatus("聞いています…", "live");
-  }
-  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-
-  held.set(d, { onMs: performance.now(), voice: startVoice(degToMidi(d), "you") });
-  const pad = document.querySelector('.pad[data-deg="' + d + '"]');
+  const beat = beatNow();
+  lastActivity = beat;
+  held.set(d, { beatOn: beat, voice: startVoice(degToMidi(d), "you") });
+  const pad = padFor(d);
   if (pad) pad.classList.add("on");
+  setStatus("聞いています…", "live");
+  requestSpeculation();
 }
 
 function noteOff(degree) {
@@ -977,29 +1117,24 @@ function noteOff(degree) {
   if (!h) return;
   held.delete(d);
   h.voice.stop();
-  capture.push({ degree: d, onMs: h.onMs, offMs: performance.now() });
 
-  const pad = document.querySelector('.pad[data-deg="' + d + '"]');
+  const beat = beatNow();
+  lastActivity = beat;
+  events.push({ degree: d, beatOn: h.beatOn, beatOff: Math.max(beat, h.beatOn + GRID / 2) });
+  const pad = padFor(d);
   if (pad) pad.classList.remove("on");
-
-  if (held.size === 0) {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(finalize, gapMs());
-  }
+  requestSpeculation();
 }
 
 function reset() {
-  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-  for (const [d, h] of held) { h.voice.stop(); const p = document.querySelector('.pad[data-deg="' + d + '"]'); if (p) p.classList.remove("on"); }
+  clearTimeout(prepTimer);
+  prepGen++;
+  for (const [d, h] of held) { h.voice.stop(); const p = padFor(d); if (p) p.classList.remove("on"); }
   held.clear();
-  capture = [];
-  stopPlayhead();
+  transport = null;
+  lastActivity = 0;
+  beginTurn();
   state.phase = "idle";
-  state.call = [];
-  state.response = [];
-  state.readout = null;
-  state.isExample = false;
-  renderAll();
   setStatus("パッドを押すか A〜L キーで弾いてください", null);
 }
 
@@ -1094,15 +1229,24 @@ function initEvents() {
   $("#tonic").addEventListener("change", (e) => { state.tonic = e.target.value; renderAll(); });
   $("#scale").addEventListener("change", (e) => { state.scale = e.target.value; renderAll(); });
   $("#bpm").addEventListener("input", (e) => {
-    state.bpm = Number(e.target.value);
+    setBpm(Number(e.target.value));
     $("#bpm-val").textContent = String(state.bpm);
   });
   $("#metro").addEventListener("change", (e) => { state.metro = e.target.checked; });
   $("#clear").addEventListener("click", reset);
   $("#replay").addEventListener("click", () => {
-    if (!state.response.length) return;
-    stopPlayhead();
-    playResponse(state.response);
+    if (!state.response.length || !audio()) return;
+    if (!transport) startTransport();
+    const at = Math.ceil(beatNow() + LEAD_S * transport.bpm / 60);
+    entry = {
+      beat: at,
+      notes: state.response,
+      done: new Set(),
+      endBeat: at + phraseLen(state.response),
+    };
+    state.callAnchor = at - state.respStart;
+    state.phase = "responding";
+    setStatus("応答中", "resp");
   });
 }
 
@@ -1111,15 +1255,18 @@ function initEvents() {
 // ---------------------------------------------------------------------------
 
 function loadExample() {
-  state.call = [
+  const call = [
     { degree: 0, beat: 0,   dur: 0.5 },
     { degree: 2, beat: 0.5, dur: 0.5 },
     { degree: 4, beat: 1,   dur: 0.5 },
     { degree: 2, beat: 1.5, dur: 0.5 },
     { degree: 4, beat: 2,   dur: 1 },
   ];
-  const r = respond(state.call);
+  const r = respond(call);
+  state.call = call;
+  state.callAnchor = 0;
   state.readout = r;
+  state.respStart = Math.max(4, Math.ceil((phraseLen(call) + 0.5) / 4) * 4);
   state.response = r.response;
   state.isExample = true;
 }
@@ -1129,10 +1276,14 @@ buildPads();
 initEvents();
 loadExample();
 renderAll();
+renderPrep();
 setStatus("例を表示中 — 弾くと差し替わります", null);
+setInterval(tick, 25);
+requestAnimationFrame(frame);
 initMidi();
 
 })();
+
 </script>
 </body>
 </html>

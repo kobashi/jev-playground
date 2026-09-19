@@ -22,8 +22,34 @@ python3 -m http.server 5173 --directory web   # then open http://localhost:5173
 Opening `web/index.html` directly works too, but Web MIDI needs `localhost` or
 HTTPS, so the server is the better path when a controller is plugged in.
 
-**Jev is not wired in yet.** The app is the skeleton around the three decisions
-Jev will make, and each one is a single function with a heuristic body:
+### Timing
+
+One transport clock runs for the whole session, starting on the first note.
+Input is quantized against it, so the player and the answer share a grid.
+
+Nothing is computed at the moment the answer is due. `runSpeculation()` rebuilds
+the answer on every note-on and note-off — including notes still held — so a
+finished response is always waiting. When the turn ends, the answer enters on
+the next whole beat, scheduled into the audio clock about 90ms ahead rather than
+played at "now", and notes are handed over on a 180ms lookahead.
+
+The turn ends after half a beat of rest, or at the two-bar line even if the
+player keeps going. Playing again during an answer yields the floor: the
+unscheduled remainder is dropped.
+
+Measured in Chromium, from the last key release to the answer entering: 0.46 to
+1.08 beats, always on the beat. The spread is just where the release fell
+against the grid.
+
+That shape is what makes Jev droppable. `computeResponse()` is already
+awaited, already fired mid-phrase, and already guards against a reply that
+arrives after a newer note, so a 70-500ms round trip hides inside the phrase
+instead of landing in the gap.
+
+### The Jev seams
+
+The app is the skeleton around the three decisions Jev will make, and each one
+is a single function with a heuristic body:
 
 | Function | Decides | Becomes |
 | --- | --- | --- |
