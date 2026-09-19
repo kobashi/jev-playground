@@ -289,3 +289,8 @@ What is still open:
 - **Whether `all_broken` can be reworded into something usable.**
 - **Whether `jev-preview` scores differently.** The evals here would run against
   it unchanged.
+
+## License
+
+MIT. The evals are the part most worth taking — `eval/` is self-contained apart
+from the client in `src/`, and the phrase sets carry their own ground truth.
