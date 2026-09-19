@@ -12,7 +12,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke.ts",
-    "check": "npm run typecheck && npm run test"
+    "check": "npm run typecheck && npm run test",
+    "deploy": "wrangler pages deploy",
+    "dev:web": "wrangler pages dev"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"

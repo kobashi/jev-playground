@@ -46,22 +46,57 @@ awaited, already fired mid-phrase, and already guards against a reply that
 arrives after a newer note, so a 70-500ms round trip hides inside the phrase
 instead of landing in the gap.
 
-### The Jev seams
+### Seats and engines
 
-The app is the skeleton around the three decisions Jev will make, and each one
-is a single function with a heuristic body:
+Two seats trade phrases. Each seat is a person, the local heuristics, or Jev,
+and any combination works: play against either engine, or set both seats to an
+engine and watch them trade with nobody at the keyboard. Only one seat can be a
+person, because there is only one keyboard.
 
-| Function | Decides | Becomes |
-| --- | --- | --- |
-| `interpret(call)` | contour, density, whether the phrase landed | one `systemOne` call carrying `choice` + `score` + `noul` questions |
-| `chooseStrategy(itp)` | imitate, invert, extend, contrast… | a `choice` question over the seven strategies |
-| `rank(cands, …)` | which candidate answers best | a `choice` question whose criteria *are* the candidates |
+Both engines return the same result shape — candidates, a probability for each,
+a strategy distribution — so the sampling, the readout and the guards are shared.
+Candidates are always generated locally. Jev ranks them; it never writes notes.
 
-The candidate melodies are generated locally and stay that way — Jev returns
-judgments, never notes. Each seam already produces a probability distribution
-and samples from it rather than taking the argmax, which is the same shape Jev's
-`probabilities` field arrives in, so swapping the bodies does not disturb the
-wiring. The side panel shows those distributions live.
+| Engine | Where the decision happens |
+| --- | --- |
+| `local` | `interpret()`, `chooseStrategy()` and `rank()` in the page |
+| `jev` | one `systemOne` call behind `POST /api/respond` |
+
+The Jev path sends a pool spanning every strategy and asks one question set:
+did the call come to rest, what is its rhythmic character, which candidate
+answers it best, and are they all broken. Arithmetic the page can do for
+itself — note counts, range, contour, density — is deliberately not asked. A
+strategy's weight then falls out of the answer: it is the probability mass its
+own candidates carry.
+
+If the Jev call fails, that turn falls back to the local engine rather than
+dropping the beat, the failure is shown, and three in a row stop an automatic
+session.
+
+### Keeping an automatic session finite
+
+Two engines answering each other will loop given the chance, so the session is
+bounded from several directions at once:
+
+| Guard | Limit |
+| --- | --- |
+| Exchanges per session | 16 |
+| Engine calls per session | 48 |
+| Speculations per human turn (Jev) | 6 |
+| Consecutive engine failures | 3 |
+| Cycle rescues before stopping | 3 |
+| Hidden tab | stops the session |
+
+Cycle detection is the one that matters musically. Every phrase is reduced to a
+signature; if the sampled answer repeats anything from the last six phrases,
+the sampler walks down the probabilities for one that does not. That rescue is
+allowed three times, and a session where *every* candidate repeats stops
+immediately — that is the fixed point where one engine copies the other forever.
+
+Verified two ways: 3000 simulated sessions in Node, every one terminating with a
+reason (worst case 17 iterations, 16 engine calls), and a real local-vs-local
+session in Chromium that ran to the 16-exchange cap and stopped by itself with
+no page errors.
 
 ## Publishing
 
@@ -70,13 +105,31 @@ rules out a static-only host once Jev is wired in.
 
 | Target | Works? | Why |
 | --- | --- | --- |
-| Cloudflare Pages + Workers | Yes | Static front end plus a function holding the key as a secret binding, from one deploy. |
+| Cloudflare Pages + Functions | Yes | `functions/api/respond.ts` holds the key as a secret binding; `web/` is served as static assets. |
 | GitHub Pages | Only without Jev | No server side, so the key would have to be typed in by each visitor. |
 | Claude Artifact | Only without Jev | No secret storage, and its CSP blocks calls to the API. Good for the skeleton. |
 
-The skeleton needs none of that, so it runs anywhere today. The choice only
-binds when the Jev calls land, and the plan is Cloudflare Pages with a Worker at
-`/api/respond`.
+The local engine needs none of that, so the page runs anywhere today; choosing
+a Jev seat on a host without the function shows the failure and falls back.
+
+```sh
+npx wrangler pages secret put TYPESAFE_API_KEY
+npm run deploy
+```
+
+`npm run dev:web` serves the page and the function together for local work.
+
+**The endpoint is unauthenticated.** Anyone who can reach a public deployment
+can spend the account's Jev budget through it. Request size is capped — 64 notes
+per phrase, 24 candidates — and the questions are built server side so callers
+cannot supply their own, but that bounds each call rather than the number of
+them. Put access control or a rate limit in front of it before handing the URL
+out.
+
+Neither the function nor the deployment has been run: there is no API key and
+no Cloudflare account in the environment this was written in. `src/respond.ts`
+is covered by tests against an injected fetch, so the request it builds is
+verified; the deploy itself is not.
 
 ## Setup
 

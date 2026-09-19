@@ -156,6 +156,27 @@ input[type="range"]{width:108px;accent-color:var(--bot-fill);background:transpar
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 .legend .k-you{background:var(--you-fill)}
 .legend .k-bot{background:var(--bot-fill)}
+.seats{
+  flex:0 0 auto;display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;
+  padding:8px 12px;border:1px solid var(--line);border-radius:10px;
+  background:var(--surface);box-shadow:var(--shadow);
+}
+.seats .vs{font-family:"DM Mono",ui-monospace,monospace;color:var(--ink-3);padding-bottom:6px}
+.meters{
+  display:flex;gap:14px;margin:0 0 5px auto;font-size:11px;color:var(--ink-2);
+  font-family:"DM Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;
+}
+.meters b{font-weight:500;color:var(--ink)}
+.source{
+  margin:9px 0 0;text-align:right;font-family:"DM Mono",ui-monospace,monospace;
+  font-size:10.5px;color:var(--ink-3);
+}
+.banner{
+  flex:0 0 auto;margin:0;padding:7px 11px;border-radius:8px;font-size:12px;
+  background:var(--bot-ghost);color:var(--ink);
+  border:1px solid color-mix(in srgb, var(--bot) 34%, transparent);
+}
+.banner.stop{font-weight:600}
 .prep{
   font-size:10.5px;font-weight:600;color:var(--bot);
   background:var(--bot-ghost);border:1px solid color-mix(in srgb, var(--bot) 32%, transparent);
@@ -271,6 +292,18 @@ input[type="range"]{width:108px;accent-color:var(--bot-fill);background:transpar
     </div>
   </header>
 
+  <div class="seats">
+    <label class="field"><span>一人目</span><select id="seat0"></select></label>
+    <span class="vs">↔</span>
+    <label class="field"><span>二人目</span><select id="seat1"></select></label>
+    <button class="btn" id="auto" type="button">自動セッション開始</button>
+    <p class="meters">
+      <span>交代 <b id="m-turns">0</b>/<b id="m-max">16</b></span>
+      <span>エンジン呼び出し <b id="m-calls">0</b></span>
+    </p>
+  </div>
+  <p class="banner" id="banner" hidden></p>
+
   <main class="stage">
 
     <section class="roll-wrap" aria-label="ピアノロール">
@@ -278,8 +311,8 @@ input[type="range"]{width:108px;accent-color:var(--bot-fill);background:transpar
         <p class="status"><span class="dot" id="dot"></span><span id="status-text">パッドを押すか A〜L キーで弾いてください</span></p>
         <span class="prep" id="prep" hidden></span>
         <p class="legend">
-          <span><i class="k-you"></i>あなた</span>
-          <span><i class="k-bot"></i>応答</span>
+          <span><i class="k-you"></i><span id="lg0">一人目</span></span>
+          <span><i class="k-bot"></i><span id="lg1">二人目</span></span>
         </p>
       </div>
       <div class="ruler" id="ruler"></div>
@@ -307,11 +340,12 @@ input[type="range"]{width:108px;accent-color:var(--bot-fill);background:transpar
       <h2>候補ランキング</h2>
       <div class="prob" id="candidates"></div>
 
+      <p class="source" id="source" hidden></p>
+
       <div class="seam-note">
-        <b>ここが Jev の差し込み口です。</b>
-        上の3つは今すべてヒューリスティックです。
-        <code>interpret()</code> / <code>chooseStrategy()</code> / <code>rank()</code>
-        を Jev 呼び出しに差し替えれば、確率で選ぶ配線はそのまま動きます。
+        <b>席ごとにエンジンを選べます。</b>
+        ローカルはヒューリスティック、Jev は候補一式を <code>/api/respond</code> に送って
+        選ばせます。どちらも同じ確率分布を返すので、選び方も表示も共通です。
       </div>
     </aside>
 
@@ -384,6 +418,8 @@ const state = {
   totalBeats: 8,
   readout: null,
   callAnchor: null,
+  callSeat: 0,
+  respSeat: 1,
   isExample: true,
 };
 
@@ -781,10 +817,172 @@ function respond(call) {
 }
 
 // ---------------------------------------------------------------------------
+// Engines — local heuristics, or Jev behind the one endpoint that holds a key
+// ---------------------------------------------------------------------------
+
+const SEATS = {
+  human: "あなた",
+  local: "ローカル",
+  jev: "Jev",
+};
+
+const JEV_ENDPOINT = "/api/respond";
+const JEV_TIMEOUT_MS = 5000;
+const JEV_POOL_PER_STRATEGY = 2;
+const JEV_POOL_MAX = 20;
+
+let engineCalls = 0;
+
+/** Build a pool that spans every strategy. Jev ranks it; it never writes notes. */
+function candidatePool(call, itp) {
+  const pool = [];
+  for (const strategy of Object.keys(STRATEGIES)) {
+    for (const notes of generate(strategy, call, itp, JEV_POOL_PER_STRATEGY)) {
+      if (pool.length >= JEV_POOL_MAX) break;
+      pool.push({ id: "c" + pool.length, strategy, notes });
+    }
+  }
+  return pool;
+}
+
+/**
+ * Turn Jev's answers into the same result shape the local pipeline returns, so
+ * everything downstream — sampling, the readout, the guards — is untouched.
+ */
+function fromJev(pool, data, itp) {
+  const answers = (data && data.answers) || {};
+  const cands = pool.map((c) => c.notes);
+  const table = answers.best && answers.best.probabilities;
+  const raw = pool.map((c) => (table && typeof table[c.id] === "number" ? Math.max(0, table[c.id]) : 0));
+  const total = raw.reduce((a, b) => a + b, 0);
+  const probs = total > 0 ? raw.map((p) => p / total) : cands.map(() => 1 / cands.length);
+  const idx = sampleIndex(probs);
+
+  // a strategy is worth the probability mass its candidates carry
+  const stratProbs = {};
+  for (const k of Object.keys(STRATEGIES)) stratProbs[k] = 0;
+  pool.forEach((c, i) => { stratProbs[c.strategy] += probs[i]; });
+
+  const ended = answers.ended && typeof answers.ended.noul === "number"
+    ? answers.ended.noul >= 0.5
+    : itp.closed;
+
+  return {
+    itp: Object.assign({}, itp, { closed: ended }),
+    strat: { pick: pool[idx].strategy, probs: stratProbs },
+    cands,
+    probs,
+    idx,
+    response: cands[idx],
+    source: "jev",
+    usage: data && data.usage,
+    broken: answers.all_broken && typeof answers.all_broken.noul === "number" ? answers.all_broken.noul : null,
+  };
+}
+
+async function jevRespond(call, signal) {
+  const itp = interpret(call);
+  const pool = candidatePool(call, itp);
+  if (!pool.length) throw new Error("候補を生成できませんでした");
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), JEV_TIMEOUT_MS);
+  if (signal) signal.addEventListener("abort", () => ac.abort(), { once: true });
+
+  const startedAt = performance.now();
+  try {
+    const res = await fetch(JEV_ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ call, candidates: pool, tonic: state.tonic, scale: state.scale }),
+      signal: ac.signal,
+    });
+    if (!res.ok) {
+      let detail = "";
+      try { detail = (await res.json()).error || ""; } catch (e) { /* body was not JSON */ }
+      throw new Error("HTTP " + res.status + (detail ? " — " + detail : ""));
+    }
+    const out = fromJev(pool, await res.json(), itp);
+    out.latency = Math.round(performance.now() - startedAt);
+    return out;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** One call to whichever engine a seat is set to. Counted, for the cost guard. */
+async function runEngine(engine, call, signal) {
+  engineCalls++;
+  updateMeters();
+  if (engine === "jev") return await jevRespond(call, signal);
+  return Object.assign(respond(call), { source: "local" });
+}
+
+// ---------------------------------------------------------------------------
+// Session — two seats trade, and either seat may be a person or an engine
+// ---------------------------------------------------------------------------
+
+const GUARD = {
+  maxTurns: 16,          // an automatic session is never open-ended
+  maxEngineCalls: 48,    // and never unbounded in cost
+  cycleWindow: 6,        // a phrase seen this recently counts as a repeat
+  maxCycleBreaks: 3,     // three rescues, then the session has stalled
+  maxErrors: 3,
+  maxSpeculationsPerTurn: 6,
+};
+
+const session = {
+  seats: ["human", "local"],
+  active: 0,
+  last: [],
+  lastAnchor: 0,
+  history: [],
+  turns: 0,
+  breaks: 0,
+  errors: 0,
+  auto: false,
+};
+
+const signature = (notes) => notes.map((n) => n.degree + "@" + n.beat + "/" + n.dur).join(",");
+const seatLabel = (i) => SEATS[session.seats[i]];
+
+/**
+ * Hard stops for an automatic session, checked before a turn is spent.
+ * Returns the reason to stop, or null to carry on.
+ */
+function guardBeforeTurn(s, calls, hidden) {
+  if (s.turns >= GUARD.maxTurns) return "交代が上限（" + GUARD.maxTurns + "回）に達しました";
+  if (calls >= GUARD.maxEngineCalls) return "エンジン呼び出しが上限（" + GUARD.maxEngineCalls + "回）に達しました";
+  if (s.errors >= GUARD.maxErrors) return "エンジンが連続で失敗しました";
+  if (hidden) return "タブが非表示になったため停止しました";
+  return null;
+}
+
+/**
+ * Keep the session from settling into a loop: if the sampled answer repeats a
+ * phrase from the recent past, walk down the probabilities for one that does
+ * not. `idx` is -1 when every candidate is a repeat.
+ */
+function resolvePhrase(r, history) {
+  const recent = history.slice(-GUARD.cycleWindow);
+  const first = signature(r.cands[r.idx] || []);
+  if (!recent.includes(first)) return { idx: r.idx, cycled: false };
+
+  const order = r.probs
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => b.p - a.p);
+  for (const o of order) {
+    if (!recent.includes(signature(r.cands[o.i] || []))) return { idx: o.i, cycled: true };
+  }
+  return { idx: -1, cycled: true };
+}
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
 const pct = (v) => v.toFixed(4) + "%";
+const seatClass = (i) => (i === 0 ? "you" : "bot");
 
 function layout() {
   const callLen = phraseLen(state.call);
@@ -851,22 +1049,26 @@ function renderNotes() {
   if (!state.call.length && !state.response.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "パッドを押すと、ここにあなたのフレーズが描かれます";
+    empty.textContent = session.seats.includes("human")
+      ? "パッドを押すと、ここにあなたのフレーズが描かれます"
+      : "「自動セッション開始」で二つのエンジンが掛け合いを始めます";
     roll.insertBefore(empty, ph);
     return;
   }
 
-  for (const n of state.call) roll.insertBefore(noteEl(n, "you", 0), ph);
+  for (const n of state.call) roll.insertBefore(noteEl(n, seatClass(state.callSeat), 0), ph);
 
   if (state.response.length) {
     const seam = document.createElement("div");
     seam.className = "seam";
     seam.style.left = pct(state.respStart * 100 / state.totalBeats);
     const tag = document.createElement("span");
-    tag.textContent = "応答";
+    tag.textContent = seatLabel(state.respSeat);
     seam.appendChild(tag);
     roll.insertBefore(seam, ph);
-    for (const n of state.response) roll.insertBefore(noteEl(n, "bot", state.respStart), ph);
+    for (const n of state.response) {
+      roll.insertBefore(noteEl(n, seatClass(state.respSeat), state.respStart), ph);
+    }
   }
 }
 
@@ -888,11 +1090,11 @@ function meterRow(label, p, picked) {
 
 function renderReadout() {
   const r = state.readout;
-  const dl = $("#interp"), st = $("#strategies"), cd = $("#candidates");
+  const dl = $("#interp"), st = $("#strategies"), cd = $("#candidates"), src = $("#source");
 
   if (!r) {
     dl.querySelectorAll("dd").forEach((d) => { d.textContent = "—"; });
-    st.innerHTML = ""; cd.innerHTML = "";
+    st.innerHTML = ""; cd.innerHTML = ""; src.hidden = true;
     return;
   }
 
@@ -918,17 +1120,45 @@ function renderReadout() {
     .sort((a, b) => b.p - a.p)
     .slice(0, 5)
     .forEach(({ p, i }) => cd.appendChild(meterRow("候補 " + (i + 1) + " · " + cands[i].length + "音", p, i === idx)));
+
+  const bits = [r.source === "jev" ? "Jev" : "ローカル"];
+  if (r.latency) bits.push(r.latency + "ms");
+  if (r.usage && r.usage.input_tokens) bits.push(r.usage.input_tokens + " tok");
+  if (r.broken !== null && r.broken !== undefined) bits.push("破綻 " + (r.broken * 100).toFixed(0) + "%");
+  if (r.fellBack) bits.push("Jev 失敗のため代替");
+  src.hidden = false;
+  src.textContent = bits.join(" · ");
 }
 
-/** Show that an answer is already built and waiting for its beat. */
 function renderPrep() {
   const el = $("#prep");
-  if (prepared && prepared.response.length) {
+  if (prepared && prepared.response && prepared.response.length) {
     el.hidden = false;
     el.textContent = "用意済み · " + STRATEGIES[prepared.strat.pick] + " · " + prepared.response.length + "音";
   } else {
     el.hidden = true;
   }
+}
+
+function updateMeters() {
+  $("#m-turns").textContent = String(session.turns);
+  $("#m-calls").textContent = String(engineCalls);
+  $("#lg0").textContent = "一人目: " + seatLabel(0);
+  $("#lg1").textContent = "二人目: " + seatLabel(1);
+}
+
+let bannerTimer = 0;
+function showBanner(text, sticky) {
+  const el = $("#banner");
+  el.hidden = false;
+  el.textContent = text;
+  el.className = "banner" + (sticky ? " stop" : "");
+  clearTimeout(bannerTimer);
+  if (!sticky) bannerTimer = setTimeout(() => { el.hidden = true; }, 6000);
+}
+function clearBanner() {
+  clearTimeout(bannerTimer);
+  $("#banner").hidden = true;
 }
 
 function setStatus(text, mode) {
@@ -944,74 +1174,201 @@ function renderAll() {
 }
 
 // ---------------------------------------------------------------------------
-// Speculation — the answer is built while the phrase is still being played,
-// and rebuilt on every note, so nothing is computed at the entry point.
+// Speculation — the answer is built before its turn arrives, never during it
 // ---------------------------------------------------------------------------
 
 let prepared = null;
 let prepGen = 0;
 let prepTimer = 0;
+let specAbort = null;
+let specCount = 0;
+let lastSpecSig = "";
+
+const SPEC_DELAY = { local: 35, jev: 220 };
 
 /**
- * Resolves immediately today. A Jev call drops in here unchanged: it is already
- * awaited, already fired mid-phrase, and already guarded against a stale reply.
+ * Ask a seat's engine for its answer to `call` and hold it until its turn.
+ * A Jev failure falls back to the local pipeline for that turn rather than
+ * dropping the beat, and is counted towards the error guard.
  */
-async function computeResponse(call) {
-  return respond(call);
+async function prepareAnswer(seat, call, opts) {
+  const engine = session.seats[seat];
+  if (engine === "human" || !call.length) return null;
+
+  const generation = ++prepGen;
+  if (specAbort) specAbort.abort();
+  const ac = new AbortController();
+  specAbort = ac;
+
+  let r;
+  try {
+    r = await runEngine(engine, call, ac.signal);
+    session.errors = 0;
+  } catch (err) {
+    if (ac.signal.aborted) return null;
+    session.errors++;
+    const message = err && err.message ? err.message : String(err);
+    showBanner("Jev 呼び出しに失敗 — このターンはローカルで代替します: " + message);
+    r = Object.assign(respond(call), { source: "local", fellBack: true });
+  }
+  if (generation !== prepGen) return null;      // a newer phrase arrived; this is stale
+
+  prepared = Object.assign({ forSeat: seat, call }, r);
+  if (opts && opts.live) {
+    state.call = call;
+    state.callSeat = session.active;
+    state.callAnchor = opts.anchor;
+    state.readout = r;
+    state.response = [];
+    renderAll();
+  }
+  renderPrep();
+  return prepared;
 }
 
 function requestSpeculation() {
+  const seat = 1 - session.active;
+  const engine = session.seats[seat];
+  if (engine === "human") return;
   clearTimeout(prepTimer);
-  prepTimer = setTimeout(runSpeculation, 35);
-}
-
-async function runSpeculation() {
-  const generation = ++prepGen;
-  const { anchor, notes } = quantizeTurn();
-  if (!notes.length) { prepared = null; renderPrep(); return; }
-
-  const r = await computeResponse(notes);
-  if (generation !== prepGen) return;        // a newer note landed; this reply is stale
-
-  prepared = Object.assign({ anchor, call: notes }, r);
-  state.call = notes;
-  state.callAnchor = anchor;
-  state.readout = r;
-  state.response = [];
-  renderAll();
-  renderPrep();
+  prepTimer = setTimeout(() => {
+    const { anchor, notes } = quantizeTurn();
+    if (!notes.length) { prepared = null; renderPrep(); return; }
+    const sig = signature(notes);
+    if (sig === lastSpecSig) return;                       // nothing changed
+    if (engine === "jev" && specCount >= GUARD.maxSpeculationsPerTurn) return;
+    lastSpecSig = sig;
+    specCount++;
+    void prepareAnswer(seat, notes, { live: true, anchor });
+  }, SPEC_DELAY[engine] || 35);
 }
 
 // ---------------------------------------------------------------------------
-// Scheduling — notes are handed to the audio clock ahead of time, never "now"
+// Scheduling and turn taking
 // ---------------------------------------------------------------------------
 
-const SILENCE_BEATS = 0.5;   // half a beat of rest is enough to take the turn
-const TRADE_BEATS = 8;       // come in at the two-bar line even if they play on
+const SILENCE_BEATS = 0.5;
+const TRADE_BEATS = 8;
 const LOOKAHEAD_S = 0.18;
 const LEAD_S = 0.09;
 
 let entry = null;
+let machineBusy = false;
+let turnAnchor = null;
 
-function commitEntry(beat) {
-  const at = Math.ceil(beat + LEAD_S * transport.bpm / 60);
-  entry = {
-    beat: at,
-    notes: prepared.response,
-    done: new Set(),
-    endBeat: at + phraseLen(prepared.response),
-  };
-  state.call = prepared.call;
-  state.callAnchor = prepared.anchor;
-  state.response = prepared.response;
-  state.respStart = at - prepared.anchor;
-  state.readout = prepared;
-  state.phase = "responding";
-  setStatus("応答中 — " + STRATEGIES[prepared.strat.pick], "resp");
-  events = [];
+function scheduleMachinePhrase(r, idx) {
+  const notes = r.cands[idx];
+  const at = Math.ceil(beatNow() + LEAD_S * transport.bpm / 60);
+  entry = { beat: at, notes, done: new Set(), endBeat: at + phraseLen(notes) };
+
+  state.call = session.last;
+  state.callAnchor = session.lastAnchor;
+  state.callSeat = 1 - session.active;
+  state.response = notes;
+  state.respSeat = session.active;
+  state.respStart = at - session.lastAnchor;
+  state.readout = Object.assign({}, r, { idx });
+  state.phase = "playing";
   prepared = null;
   renderAll();
   renderPrep();
+  setStatus(seatLabel(session.active) + " — " + STRATEGIES[r.strat.pick], "resp");
+
+  // build the reply to this phrase while it is still sounding
+  const next = 1 - session.active;
+  if (session.seats[next] !== "human") void prepareAnswer(next, notes, null);
+}
+
+/** Play a phrase nobody had to decide on, to open an automatic session. */
+function scheduleSeed(notes) {
+  const at = Math.ceil(beatNow() + LEAD_S * transport.bpm / 60);
+  entry = { beat: at, notes, done: new Set(), endBeat: at + phraseLen(notes) };
+  session.lastAnchor = at;
+  state.call = [];
+  state.callAnchor = at;
+  state.callSeat = 1 - session.active;
+  state.response = notes;
+  state.respSeat = session.active;
+  state.respStart = 0;
+  state.readout = null;
+  state.phase = "playing";
+  renderAll();
+  setStatus(seatLabel(session.active) + " — 種フレーズ", "resp");
+  const next = 1 - session.active;
+  if (session.seats[next] !== "human") void prepareAnswer(next, notes, null);
+}
+
+function abortTurn(reason) {
+  entry = null;
+  if (session.auto) { stopAuto(reason); return; }
+  state.phase = "idle";
+  showBanner(reason);
+  setStatus("どうぞ、続けてください", null);
+}
+
+async function startMachineTurn() {
+  if (machineBusy || entry) return;
+  machineBusy = true;
+  try {
+    if (session.auto) {
+      const stop = guardBeforeTurn(session, engineCalls, document.hidden);
+      if (stop) { stopAuto(stop); return; }
+    }
+
+    let r = prepared;
+    if (!r || r.forSeat !== session.active || signature(r.call) !== signature(session.last)) {
+      r = await prepareAnswer(session.active, session.last, null);
+    }
+    if (!r || !r.cands || !r.cands.length) { abortTurn("応答を作れませんでした"); return; }
+    if (!session.auto && !entry && state.phase !== "playing" && held.size) return;  // they played again
+
+    const pick = resolvePhrase(r, session.history);
+    let idx = pick.idx >= 0 ? pick.idx : r.idx;
+    if (pick.cycled && session.auto) {
+      session.breaks++;
+      if (session.breaks >= GUARD.maxCycleBreaks) { stopAuto("同じフレーズに戻り続けています"); return; }
+      if (pick.idx < 0) { stopAuto("どの候補も直近のフレーズの繰り返しです"); return; }
+      showBanner("循環を検出 — 別の候補に差し替えました（" + session.breaks + "/" + GUARD.maxCycleBreaks + "）");
+    }
+    if (!r.cands[idx] || !r.cands[idx].length) { abortTurn("フレーズが空になりました"); return; }
+
+    scheduleMachinePhrase(r, idx);
+  } finally {
+    machineBusy = false;
+  }
+}
+
+function beginHumanTurn() {
+  state.phase = "listening";
+  events = [];
+  turnAnchor = null;
+  specCount = 0;
+  lastSpecSig = "";
+  prepared = null;
+  renderPrep();
+  setStatus("どうぞ、続けてください", null);
+}
+
+/** One seat has finished. Record the phrase, flip seats, and start the next. */
+function handOff(phrase, anchor) {
+  session.last = phrase;
+  session.lastAnchor = anchor;
+  session.history.push(signature(phrase));
+  if (session.history.length > 32) session.history.shift();
+  session.turns++;
+  entry = null;
+  session.active = 1 - session.active;
+  updateMeters();
+
+  if (session.seats[session.active] === "human") beginHumanTurn();
+  else void startMachineTurn();
+}
+
+function endHumanTurn() {
+  const { anchor, notes } = quantizeTurn();
+  if (!notes.length) return;
+  events = [];
+  handOff(notes, anchor);
 }
 
 function pumpNotes(beat) {
@@ -1023,12 +1380,13 @@ function pumpNotes(beat) {
     if (abs > horizon) return;
     entry.done.add(i);
     const when = Math.max(ctx.currentTime + 0.004, beatToTime(abs));
-    playNote(degToMidi(n.degree), when, Math.max(0.14, n.dur * beatSec * 0.9), "bot");
+    playNote(degToMidi(n.degree), when, Math.max(0.14, n.dur * beatSec * 0.9), seatClass(state.respSeat) === "you" ? "you" : "bot");
   });
   if (beat > entry.endBeat + 0.25) {
-    entry = null;
-    state.phase = "idle";
-    setStatus("どうぞ、続けてください", null);
+    const played = entry.notes;
+    const at = entry.beat;
+    if (session.auto || session.seats.includes("human")) handOff(played, at);
+    else { entry = null; state.phase = "idle"; }
   }
 }
 
@@ -1046,10 +1404,10 @@ function tick() {
   if (!transport || !ctx) return;
   const beat = beatNow();
 
-  if (state.phase === "listening" && !entry && prepared) {
+  if (state.phase === "listening" && (events.length || held.size)) {
     const quiet = held.size === 0 && (beat - lastActivity) >= SILENCE_BEATS;
-    const atTradeLine = (beat - prepared.anchor) >= TRADE_BEATS;
-    if (quiet || atTradeLine) commitEntry(beat);
+    const atLine = turnAnchor !== null && (beat - turnAnchor) >= TRADE_BEATS;
+    if (quiet || atLine) endHumanTurn();
   }
 
   if (entry) pumpNotes(beat);
@@ -1075,34 +1433,104 @@ function frame() {
 }
 
 // ---------------------------------------------------------------------------
-// Turn taking
+// Automatic sessions — two engines trading, with an end that always arrives
+// ---------------------------------------------------------------------------
+
+/** An opening motif, so the first engine has something to answer. */
+function seedPhrase() {
+  const steps = [1, 2, -1, 2, -2, 3];
+  const n = 3 + Math.floor(Math.random() * 3);
+  const out = [];
+  let beat = 0, degree = 0;
+  for (let i = 0; i < n; i++) {
+    const dur = [0.5, 0.5, 1][Math.floor(Math.random() * 3)];
+    out.push({ degree: clampDeg(degree), beat, dur });
+    beat += dur;
+    degree = clampDeg(degree + steps[Math.floor(Math.random() * steps.length)]);
+  }
+  return out;
+}
+
+function startAuto() {
+  if (session.seats.includes("human")) return;
+  if (!audio()) return;
+  if (!transport) startTransport();
+
+  session.auto = true;
+  session.turns = 0;
+  session.breaks = 0;
+  session.errors = 0;
+  session.history = [];
+  session.active = 0;
+  engineCalls = 0;
+  prepared = null;
+  clearBanner();
+  updateMeters();
+  $("#auto").textContent = "停止";
+  $("#auto").classList.add("btn-accent");
+  scheduleSeed(seedPhrase());
+}
+
+function stopAuto(reason) {
+  const wasAuto = session.auto;
+  session.auto = false;
+  entry = null;
+  machineBusy = false;
+  state.phase = "idle";
+  $("#auto").textContent = "自動セッション開始";
+  $("#auto").classList.remove("btn-accent");
+  if (reason && wasAuto) showBanner("停止: " + reason, true);
+  setStatus(reason ? "停止しました" : "待機中", null);
+  renderPrep();
+}
+
+// ---------------------------------------------------------------------------
+// Input
 // ---------------------------------------------------------------------------
 
 function padFor(d) { return document.querySelector('.pad[data-deg="' + d + '"]'); }
 
-/** Clear the board for a fresh phrase, from idle, the example, or mid-answer. */
-function beginTurn() {
-  entry = null;                 // playing again yields the floor
+/** Clear the board and take the human seat's turn, from wherever we were. */
+function takeTheFloor() {
+  const seat = session.seats.indexOf("human");
+  if (seat < 0) return false;
+  if (session.auto) stopAuto("演奏で割り込みました");
+  entry = null;
+  machineBusy = false;
   prepared = null;
   events = [];
+  session.active = seat;
+  turnAnchor = null;
+  specCount = 0;
+  lastSpecSig = "";
   state.call = [];
   state.response = [];
   state.readout = null;
   state.callAnchor = null;
+  state.callSeat = seat;
+  state.respSeat = 1 - seat;
   state.isExample = false;
   state.phase = "listening";
   renderAll();
   renderPrep();
+  return true;
 }
 
 function noteOn(degree) {
   const d = clampDeg(degree);
   if (held.has(d)) return;
+  if (session.seats.indexOf("human") < 0) {
+    showBanner("どちらかの席を「あなた」にすると弾けます");
+    return;
+  }
   if (!audio()) return;
   if (!transport) startTransport();
-  if (state.phase !== "listening") beginTurn();
+  if (state.phase !== "listening" || state.isExample) {
+    if (!takeTheFloor()) return;
+  }
 
   const beat = beatNow();
+  if (turnAnchor === null) turnAnchor = snap(beat);
   lastActivity = beat;
   held.set(d, { beatOn: beat, voice: startVoice(degToMidi(d), "you") });
   const pad = padFor(d);
@@ -1129,18 +1557,38 @@ function noteOff(degree) {
 function reset() {
   clearTimeout(prepTimer);
   prepGen++;
+  if (specAbort) specAbort.abort();
   for (const [d, h] of held) { h.voice.stop(); const p = padFor(d); if (p) p.classList.remove("on"); }
   held.clear();
+  stopAuto(null);
+  clearBanner();
   transport = null;
   lastActivity = 0;
-  beginTurn();
+  events = [];
+  turnAnchor = null;
+  specCount = 0;
+  lastSpecSig = "";
+  prepared = null;
+  engineCalls = 0;
+  session.turns = 0;
+  session.breaks = 0;
+  session.errors = 0;
+  session.history = [];
+  session.last = [];
+  session.active = Math.max(0, session.seats.indexOf("human"));
+  state.call = [];
+  state.response = [];
+  state.readout = null;
+  state.callAnchor = null;
+  state.isExample = false;
   state.phase = "idle";
-  setStatus("パッドを押すか A〜L キーで弾いてください", null);
+  updateMeters();
+  renderAll();
+  renderPrep();
+  setStatus(session.seats.includes("human")
+    ? "パッドを押すか A〜L キーで弾いてください"
+    : "「自動セッション開始」を押してください", null);
 }
-
-// ---------------------------------------------------------------------------
-// Input wiring
-// ---------------------------------------------------------------------------
 
 function buildPads() {
   const wrap = $("#pads");
@@ -1180,6 +1628,36 @@ function buildSelects() {
     s.appendChild(o);
   });
   s.value = state.scale;
+
+  [0, 1].forEach((i) => {
+    const sel = $("#seat" + i);
+    Object.entries(SEATS).forEach(([k, label]) => {
+      const o = document.createElement("option");
+      o.value = k; o.textContent = label;
+      sel.appendChild(o);
+    });
+    sel.value = session.seats[i];
+    sel.addEventListener("change", () => setSeat(i, sel.value));
+  });
+}
+
+/** Only one seat may be a person; the app has one keyboard. */
+function setSeat(i, value) {
+  session.seats[i] = value;
+  const other = 1 - i;
+  if (value === "human" && session.seats[other] === "human") {
+    session.seats[other] = "local";
+    $("#seat" + other).value = "local";
+  }
+  reset();
+  syncAutoButton();
+}
+
+function syncAutoButton() {
+  const btn = $("#auto");
+  const canAuto = !session.seats.includes("human");
+  btn.disabled = !canAuto;
+  btn.title = canAuto ? "" : "両方の席をエンジンにすると自動セッションを開始できます";
 }
 
 function midiToDegree(note) {
@@ -1217,7 +1695,7 @@ function initEvents() {
   document.addEventListener("keydown", (e) => {
     if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
     const tag = e.target && e.target.tagName;
-    if (tag === "SELECT" || tag === "INPUT") return;
+    if (tag === "SELECT" || tag === "INPUT" || tag === "BUTTON") return;
     const i = KEYS.indexOf(e.key.toLowerCase());
     if (i >= 0) { e.preventDefault(); noteOn(i); }
   });
@@ -1234,8 +1712,13 @@ function initEvents() {
   });
   $("#metro").addEventListener("change", (e) => { state.metro = e.target.checked; });
   $("#clear").addEventListener("click", reset);
+  $("#auto").addEventListener("click", () => {
+    if (session.auto) stopAuto("手動で停止しました");
+    else startAuto();
+  });
   $("#replay").addEventListener("click", () => {
     if (!state.response.length || !audio()) return;
+    if (session.auto) return;
     if (!transport) startTransport();
     const at = Math.ceil(beatNow() + LEAD_S * transport.bpm / 60);
     entry = {
@@ -1245,8 +1728,13 @@ function initEvents() {
       endBeat: at + phraseLen(state.response),
     };
     state.callAnchor = at - state.respStart;
-    state.phase = "responding";
-    setStatus("応答中", "resp");
+    state.phase = "playing";
+    setStatus("再生中", "resp");
+  });
+
+  // an automatic session must not keep spending calls on a tab nobody is watching
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && session.auto) stopAuto("タブが非表示になったため停止しました");
   });
 }
 
@@ -1262,8 +1750,10 @@ function loadExample() {
     { degree: 2, beat: 1.5, dur: 0.5 },
     { degree: 4, beat: 2,   dur: 1 },
   ];
-  const r = respond(call);
+  const r = Object.assign(respond(call), { source: "local" });
   state.call = call;
+  state.callSeat = 0;
+  state.respSeat = 1;
   state.callAnchor = 0;
   state.readout = r;
   state.respStart = Math.max(4, Math.ceil((phraseLen(call) + 0.5) / 4) * 4);
@@ -1274,6 +1764,8 @@ function loadExample() {
 buildSelects();
 buildPads();
 initEvents();
+syncAutoButton();
+updateMeters();
 loadExample();
 renderAll();
 renderPrep();
