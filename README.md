@@ -5,8 +5,52 @@ model. Jev does not generate text: it takes a block of state and a set of typed
 questions, evaluates them in parallel, and returns values drawn only from the schema
 you defined, each with calibrated probabilities and a confidence.
 
-This repository holds the client plumbing, a live smoke check, and the tests that
-cover them. The application itself is not written yet.
+This repository holds the app, the Jev client plumbing, a live smoke check, and the
+tests that cover them. The app runs today; the Jev calls are not wired in yet.
+
+## The app
+
+`web/index.html` is a call-and-response jam: play a phrase, and a continuation
+comes back. It is one standalone file with no build step and no dependencies —
+Web Audio for sound, Web MIDI when a device is present, and a computer keyboard
+or on-screen pads otherwise.
+
+```sh
+python3 -m http.server 5173 --directory web   # then open http://localhost:5173
+```
+
+Opening `web/index.html` directly works too, but Web MIDI needs `localhost` or
+HTTPS, so the server is the better path when a controller is plugged in.
+
+**Jev is not wired in yet.** The app is the skeleton around the three decisions
+Jev will make, and each one is a single function with a heuristic body:
+
+| Function | Decides | Becomes |
+| --- | --- | --- |
+| `interpret(call)` | contour, density, whether the phrase landed | one `systemOne` call carrying `choice` + `score` + `noul` questions |
+| `chooseStrategy(itp)` | imitate, invert, extend, contrast… | a `choice` question over the seven strategies |
+| `rank(cands, …)` | which candidate answers best | a `choice` question whose criteria *are* the candidates |
+
+The candidate melodies are generated locally and stay that way — Jev returns
+judgments, never notes. Each seam already produces a probability distribution
+and samples from it rather than taking the argmax, which is the same shape Jev's
+`probabilities` field arrives in, so swapping the bodies does not disturb the
+wiring. The side panel shows those distributions live.
+
+## Publishing
+
+The deciding constraint is that the Jev API key cannot reach the browser. That
+rules out a static-only host once Jev is wired in.
+
+| Target | Works? | Why |
+| --- | --- | --- |
+| Cloudflare Pages + Workers | Yes | Static front end plus a function holding the key as a secret binding, from one deploy. |
+| GitHub Pages | Only without Jev | No server side, so the key would have to be typed in by each visitor. |
+| Claude Artifact | Only without Jev | No secret storage, and its CSP blocks calls to the API. Good for the skeleton. |
+
+The skeleton needs none of that, so it runs anywhere today. The choice only
+binds when the Jev calls land, and the plan is Cloudflare Pages with a Worker at
+`/api/respond`.
 
 ## Setup
 
