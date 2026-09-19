@@ -135,6 +135,36 @@ cp .env.example .env     # then fill in TYPESAFE_API_KEY
 npm run serve
 ```
 
+### Node and an HTTP proxy
+
+Node's built-in `fetch` ignores `HTTPS_PROXY` unless told to read it, so in a
+sandbox that routes egress through a proxy the call fails with the proxy's own
+403 while `curl` to the same host succeeds. `npm run smoke` and `npm run serve`
+therefore set `NODE_USE_ENV_PROXY=1` (Node 22.21 or newer). It does nothing
+where no proxy variables are set, so it is safe on a development machine.
+
+### Measured against the live API
+
+One turn with a Jev seat, taken from three rounds through the real page:
+
+| | |
+| --- | --- |
+| Input tokens per turn | 1831, 2172, 2090 — about **2,000** |
+| Latency | 742ms cold, then **264–287ms** |
+| Model | `jev-latest` resolves to `jev-1.13.0` |
+
+At $0.042 per million input tokens and no charge for output, a turn costs about
+$0.000085, so a $5 trial balance is roughly 58,000 turns, or 1,200 automatic
+sessions at the 48-call cap. Cost is not the constraint here.
+
+`jev-preview` also exists, described as "should be better in most ways". Set
+`TYPESAFE_DEFAULT_MODEL` to try it.
+
+One thing the live runs surfaced: `all_broken` came back at **0.41–0.44** every
+round. Jev is not confident the local generator's pool contains a good answer.
+That is a finding about the generator, not the plumbing, and it is what the
+eval should look into first.
+
 ### What has been verified
 
 `npm run check` covers 44 tests: payload validation, the questions built from
@@ -146,5 +176,6 @@ a Jev seat, one request reaching the upstream on `/v1/systemone` carrying four
 questions and fourteen candidates, **no `Authorization` header on it**, and the
 answer arriving back in the readout with the upstream's token count.
 
-What has *not* been verified is a call to the real Jev API: this environment has
-no key.
+The real API has now been called too: the smoke check answers correctly
+(`billing` at confidence 1.000 on a double-charge complaint), and three rounds
+through the real page were answered by Jev with no fallback and no page errors.
