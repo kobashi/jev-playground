@@ -346,6 +346,43 @@ One caveat on that last measurement: the pools were captured against a stub, so
 the no-repeat rule was not tracking Jev's real previous pick. In play it
 excludes the strategy just used, so consecutive turns cannot both be `extend`.
 
+### Round two: the fix did not work
+
+24 more blind trials, half comparing the two rankers on the fixed system and
+half comparing, for the same call, the answer the fixed system gives against
+the answer the old one gave.
+
+| | | |
+| --- | --- | --- |
+| Jev vs local | 4 — 6 | two ties; round one was 11 — 15, so unchanged |
+| **New answer vs old answer** | **3 — 7** | **two ties** |
+
+Option A was chosen in 11 of 20 decisive trials, so this is not a position
+artefact. Ten of the twelve new answers were `extend`, and against the old
+dangling `question` it went 3 won, 5 lost, 2 tied.
+
+So the rewrite traded a `question` monoculture for an `extend` monoculture, and
+the listener likes it no better. The reasoning that led there was wrong: round
+one showed `extend` winning 3–2–1, but that was `extend` against the local
+ranker's `contrast` and `invert` picks, on a handful of trials. It said nothing
+about how `extend` holds up as the entire diet, and nothing about how it
+compares to `question`.
+
+### Why ranking cannot fix this
+
+The pool is seven fixed templates, two variants each. A ranker can only choose
+which template is heard, so whichever template it favours becomes the whole
+output, and the listener stops hearing an answer and starts hearing the
+template. Every measurement pointed at this and it took two rounds to read it:
+the pair eval found Jev near-certain about key, register, timing and line, and
+a real pool holds all four constant by construction, so Jev arrives with
+nothing to use.
+
+What that implies is a generator built by composition rather than by archetype
+— a pitch transform, a rhythm transform, a cadence and a density chosen
+independently, so the pool varies continuously instead of offering seven
+shapes. That is untested.
+
 ### What has been verified
 
 `npm run check` covers 44 tests: payload validation, the questions built from
