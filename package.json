@@ -16,7 +16,8 @@
     "serve": "NODE_USE_ENV_PROXY=1 node --env-file-if-exists=.env --import tsx scripts/serve.ts",
     "eval": "NODE_USE_ENV_PROXY=1 node --env-file-if-exists=.env --import tsx eval/run.ts",
     "eval:pairs": "NODE_USE_ENV_PROXY=1 node --env-file-if-exists=.env --import tsx eval/run-pairs.ts",
-    "eval:session": "NODE_USE_ENV_PROXY=1 node --env-file-if-exists=.env --import tsx eval/session.ts"
+    "eval:session": "NODE_USE_ENV_PROXY=1 node --env-file-if-exists=.env --import tsx eval/session.ts",
+    "eval:ab": "NODE_USE_ENV_PROXY=1 node --env-file-if-exists=.env --import tsx eval/ab.ts"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"
