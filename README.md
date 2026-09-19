@@ -201,6 +201,62 @@ same time, so it is measuring something other than what its wording asks. The
 app still displays the number, and it should not be trusted until the question
 is reworded and re-tested.
 
+## Telling two plausible answers apart
+
+The first eval put one sensible answer against five degenerate ones, and Jev won
+12 out of 12. That is a low bar. `npm run eval:pairs` raises it: two answers
+that would both pass a glance, differing in exactly one musical principle, each
+pair asked twice with the candidates swapped.
+
+| Dimension | Picked the better one | p(better) | Both orders agree |
+| --- | --- | --- | --- |
+| Note outside the key | 100% | 0.99 | 4/4 |
+| Register continuity | 100% | 0.94 | 4/4 |
+| Falls on the beat | 100% | 0.85 | 4/4 |
+| Resolves the cadence | 100% | 0.83 | 4/4 |
+| Moves by step, not leap | 100% | 0.78 | 4/4 |
+| Length matches the call | 92% | 0.65 | 5/6 |
+| Echoes the call's shape | 75% | 0.64 | 4/6 |
+| **Overall** | **94%** | **0.79** | |
+
+72 requests, $0.002. Label `a` was chosen exactly 50% of the time, so there is
+no order bias to discount.
+
+**The controls matter as much as the scores.** Four pairs hold two answers that
+are both fine. There Jev lands 0.15 from an even split, at 0.31 confidence — it
+does not manufacture a preference when there is nothing to prefer.
+
+**Jev is surest about constraints and least sure about conversation.** Key,
+register and timing are near-certainties. Whether an answer takes up the shape
+the call just made is its weakest dimension, and that is the one that makes a
+trade feel like a reply rather than a turn.
+
+### A test that measured the wrong thing
+
+The first run of this eval scored motif at 25% — worse than chance — and length
+at 63%. Both were artefacts. The unrelated answers happened to be smooth
+stepwise lines, and the over-long ones happened to be well-shaped scalar
+arches: exactly what Jev independently prefers at 100%. The comparison was
+varying two things and attributing the result to one.
+
+Rebuilt so that only one property differs — the over-long answer is now the
+good one repeated verbatim, and the unrelated answer carries the same interval
+sizes as the related one — the same questions score 92% and 75%, and the
+overall figure moves from 84% to 94%.
+
+### What this means for the app
+
+The generator already guarantees the properties Jev is certain about: every
+candidate is in key by construction, quantized to the grid, clamped in
+register, and close to the call in length. So those dimensions do not separate
+anything in a real pool, and Jev is left working in its weakest regime.
+
+What that is worth is not yet measured. The test to run next does not need
+ground truth: take real pools from the running app, and look at how much
+probability mass Jev puts on its top pick and how often it agrees with the
+local ranker. A near-uniform distribution over fourteen candidates would mean
+it is adding little there, whatever it scores on constructed pairs.
+
 ### What has been verified
 
 `npm run check` covers 44 tests: payload validation, the questions built from
