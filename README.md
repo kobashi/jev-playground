@@ -149,7 +149,7 @@ One turn with a Jev seat, taken from three rounds through the real page:
 
 | | |
 | --- | --- |
-| Input tokens per turn | 1831, 2172, 2090 — about **2,000** |
+| Input tokens per turn | about **2,200** with pitch names |
 | Latency | 742ms cold, then **264–287ms** |
 | Model | `jev-latest` resolves to `jev-1.13.0` |
 
@@ -164,6 +164,42 @@ One thing the live runs surfaced: `all_broken` came back at **0.41–0.44** ever
 round. Jev is not confident the local generator's pool contains a good answer.
 That is a finding about the generator, not the plumbing, and it is what the
 eval should look into first.
+
+## The eval
+
+`npm run eval` asks Jev about items whose answer is known by construction, in
+three encodings of the same phrases. 126 requests, 96k input tokens, $0.004,
+under ten seconds.
+
+Direction is the control: which way a phrase travels is arithmetic, so a model
+that cannot do it is not reading the notes. Cadence and ranking are the
+judgments the app leans on.
+
+| Encoding | Direction | Cadence | p(ended): closed vs open | Ranking | p(good) |
+| --- | --- | --- | --- | --- | --- |
+| `degree` — `{degree: 7}` | 97% | **63%** | 0.67 vs 0.47 | 100% | 0.86 |
+| `named` — `{note: "C5"}` | 100% | **97%** | 0.83 vs 0.33 | 100% | 0.84 |
+| `abc` — `K:C  C2 D2 E4` | 97% | 77% | 0.66 vs 0.41 | 100% | 0.66 |
+
+**Jev reads symbolic music.** Direction is 97–100% whichever way the notes are
+written, so the open question the project started with is settled.
+
+**The encoding decides whether it hears a cadence.** Every one of the five
+failures that the degree encoding made on closed phrases was a phrase ending on
+degree 7 — the tonic an octave up, which `7` hides behind a large number and
+`C5` does not. The degree encoding also called five open phrases finished. Its
+0.67-vs-0.47 separation is barely a signal; `named` separates 0.83 from 0.33.
+The app sends pitch names because of this.
+
+**Ranking is solid in any encoding.** A musically sensible answer was picked
+over five degenerate ones 12 times out of 12, in all three encodings.
+
+**`all_broken` is not usable as a quality gate.** It sits at 0.41 in every
+encoding — including the runs where Jev had just chosen the good candidate with
+0.86 probability. It says "these are all broken" and "this one is good" at the
+same time, so it is measuring something other than what its wording asks. The
+app still displays the number, and it should not be trusted until the question
+is reworded and re-tested.
 
 ### What has been verified
 

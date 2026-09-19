@@ -49,7 +49,46 @@ export class RespondError extends Error {
 }
 
 export const TONICS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-export const SCALES = ["major", "minor", "dorian", "mixolydian", "pentatonic", "blues"];
+
+/** The scales the app offers, with the semitones each degree stands for. */
+export const SCALE_STEPS: Record<string, number[]> = {
+  major: [0, 2, 4, 5, 7, 9, 11],
+  minor: [0, 2, 3, 5, 7, 8, 10],
+  dorian: [0, 2, 3, 5, 7, 9, 10],
+  mixolydian: [0, 2, 4, 5, 7, 9, 10],
+  pentatonic: [0, 2, 4, 7, 9],
+  blues: [0, 3, 5, 6, 7, 10],
+};
+
+export const SCALES = Object.keys(SCALE_STEPS);
+
+const mod = (n: number, m: number) => ((n % m) + m) % m;
+
+/**
+ * Degrees go out as pitch names.
+ *
+ * The eval settled this: asked about the same phrases as scale degrees, Jev
+ * judged cadence at 63%, and as pitch names at 97%. Every failure was a phrase
+ * ending on degree 7 — the tonic an octave up, which the degree encoding hides
+ * behind a large number. `C5` does not hide it.
+ */
+export const toPitchName = (degree: number, tonic: string, scale: string): string => {
+  const steps = SCALE_STEPS[scale] as number[];
+  const midi = 60 + TONICS.indexOf(tonic) + Math.floor(degree / steps.length) * 12 +
+    (steps[mod(degree, steps.length)] as number);
+  return (TONICS[mod(midi, 12)] as string) + String(Math.floor(midi / 12) - 1);
+};
+
+/** A note as Jev sees it: a pitch name, a position and a length. */
+export interface NamedNote {
+  note: string;
+  beat: number;
+  dur: number;
+  [field: string]: string | number;
+}
+
+export const toNamedNotes = (notes: Note[], tonic: string, scale: string): NamedNote[] =>
+  notes.map((n) => ({ note: toPitchName(n.degree, tonic, scale), beat: n.beat, dur: n.dur }));
 
 /** Bounds that keep one request small enough to stay cheap and quick. */
 export const LIMITS = {
@@ -123,8 +162,8 @@ export const parseRequest = (body: unknown): RespondRequest => {
  * answer is the most musical are judgments; how many notes it holds is not.
  */
 export const buildQuestions = (req: RespondRequest): Questions => {
-  const criteria: Record<string, Note[]> = {};
-  for (const c of req.candidates) criteria[c.id] = c.notes;
+  const criteria: Record<string, NamedNote[]> = {};
+  for (const c of req.candidates) criteria[c.id] = toNamedNotes(c.notes, req.tonic, req.scale);
 
   return {
     ended: noul("Has the call come to rest, or is it left hanging?", {
@@ -152,10 +191,9 @@ export const buildQuestions = (req: RespondRequest): Questions => {
 export const buildState = (req: RespondRequest) => ({
   key: req.tonic + " " + req.scale,
   notation:
-    "A note is a scale degree, a position and a length. degree indexes the scale, 0 is the tonic " +
-    "and 7 is the octave above it; negative degrees fall below the tonic. beat and dur are in " +
-    "quarter notes, counted from the start of the phrase.",
-  call: req.call,
+    "A note is a pitch name with its octave, a position and a length; C4 is middle C. " +
+    "beat and dur are in quarter notes, counted from the start of the phrase.",
+  call: toNamedNotes(req.call, req.tonic, req.scale),
 });
 
 /** Validate, ask Jev once, and hand back the raw answers. */

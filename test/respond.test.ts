@@ -102,10 +102,13 @@ describe("buildQuestions", () => {
     expect(q.all_broken?.type).toBe("noul");
   });
 
-  it("carries each candidate's notes through as its description", () => {
+  it("carries each candidate through as pitch names, not scale degrees", () => {
     const q = buildQuestions(parseRequest(body()));
-    const criteria = (q.best as unknown as { criteria: Record<string, Note[]> }).criteria;
-    expect(criteria.c1).toEqual([note(4, 0), note(2, 0.5)]);
+    const criteria = (q.best as unknown as { criteria: Record<string, Array<{ note: string }>> }).criteria;
+    expect(criteria.c1).toEqual([
+      { note: "G4", beat: 0, dur: 0.5 },
+      { note: "E4", beat: 0.5, dur: 0.5 },
+    ]);
   });
 
   it("does not ask for anything the client can count for itself", () => {
@@ -120,8 +123,24 @@ describe("buildState", () => {
   it("spells out the notation next to the phrase", () => {
     const state = buildState(parseRequest(body()));
     expect(state.key).toBe("C major");
-    expect(state.notation).toMatch(/0 is the tonic/);
-    expect(state.call).toHaveLength(3);
+    expect(state.notation).toMatch(/C4 is middle C/);
+    expect(state.call).toEqual([
+      { note: "C4", beat: 0, dur: 0.5 },
+      { note: "E4", beat: 0.5, dur: 0.5 },
+      { note: "G4", beat: 1, dur: 0.5 },
+    ]);
+  });
+
+  it("names the octave above the tonic as the tonic, which degree 7 hid", () => {
+    const state = buildState(parseRequest(body({ call: [note(7, 0, 1)] })));
+    expect(state.call[0]?.note).toBe("C5");
+  });
+
+  it("follows the key and the scale", () => {
+    const minor = buildState(parseRequest(body({ tonic: "A", scale: "minor", call: [note(2, 0, 1)] })));
+    expect(minor.call[0]?.note).toBe("C5");
+    const blues = buildState(parseRequest(body({ tonic: "C", scale: "blues", call: [note(3, 0, 1)] })));
+    expect(blues.call[0]?.note).toBe("F#4");
   });
 });
 
