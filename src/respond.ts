@@ -177,7 +177,11 @@ export const buildQuestions = (req: RespondRequest): Questions => {
       busy: "Dense and driving, little space.",
     }),
     best: choice(
-      "Which candidate is the most musical answer to this call? Judge it as one half of a two-part conversation: the answer should relate to what the call did, not merely avoid mistakes.",
+      "Which candidate is the best musical reply to this call? A reply takes the call " +
+        "somewhere: it picks up what the call did and carries it forward, rather than " +
+        "restating it. A candidate that repeats the call, or repeats it with small changes, " +
+        "is a weak reply however closely it matches. Prefer the one that answers the call " +
+        "and arrives somewhere of its own.",
       criteria,
     ),
     all_broken: noul("Are all of these candidates broken as answers to this call?", {

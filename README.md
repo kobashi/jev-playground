@@ -292,6 +292,60 @@ One caveat on method: the local ranker normally receives the single strategy it
 generated for, and here it was given the whole mixed pool, which changes one of
 its penalty terms.
 
+## The listening test, and what it changed
+
+27 real calls, each with the answer Jev picked and the answer the local ranker
+picked, judged blind on a phone. The tally was **local 15, Jev 11, one tie** —
+no meaningful difference over 26 decisive trials. The words that came back with
+it were worth more than the count:
+
+> Jev's lack resolution, and the development is dull. The local ones repeat the
+> same kind of development.
+
+Both complaints were traceable to the generator, and the tally agreed:
+
+| Jev's pick was | Won | Lost |
+| --- | --- | --- |
+| `question` | 5 | 9 |
+| `imitate` | 2 | 4 |
+| `extend` | 3 | 2 (one tie) |
+
+`question` and `imitate` were 20 of Jev's 27 picks and won 7 of them. Both were
+echoes: `question` kept the call's first three or four notes verbatim and added
+one dangling note, and `imitate` returned the call nearly unchanged. That is
+exactly "dull, and unresolved". Meanwhile `contrast` — 15 of the local ranker's
+27 picks — chose between two hardcoded rhythms, so its answers all sounded
+alike.
+
+### Three fixes
+
+**The generators stopped echoing.** `question` now takes the call's interval
+sequence, starts it somewhere else, and aims the last two notes at the dominant
+by step: a half cadence that asks without quoting, and rests without dangling.
+`imitate` keeps the rhythm but moves a note and settles the ending on a chord
+tone. `contrast` builds its rhythm from the call's own durations, reversed,
+instead of picking from a list of two. Measured over 400 calls: verbatim
+three-note quotes went from being the whole design to 0 of 1200, contrast went
+from 2 rhythms to 288, and `imitate` never returns the call unchanged.
+
+**A landed call is no longer answered with a question,** and the strategy just
+played is dropped from the next pool, so nobody says the same thing twice
+running. A question follows an open call 14% of the time and a landed one 6%.
+
+**The ranking question asked for the wrong thing.** It said the answer "should
+relate to what the call did" — and relatedness was the only free variable,
+since the pool already guarantees key, register, grid and length. So Jev
+maximised similarity, and fixing the generators just moved it from one echo to
+another: `question` 14/27, then `imitate` 19/28. Reworded to ask for a reply
+that "picks up what the call did and carries it forward, rather than restating
+it", and to say outright that a near-copy is a weak reply, Jev moved to
+`extend` — 19 of 24, with `imitate` down to 1. `extend` was the one strategy
+Jev won on in the listening test.
+
+One caveat on that last measurement: the pools were captured against a stub, so
+the no-repeat rule was not tracking Jev's real previous pick. In play it
+excludes the strategy just used, so consecutive turns cannot both be `extend`.
+
 ### What has been verified
 
 `npm run check` covers 44 tests: payload validation, the questions built from
