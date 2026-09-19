@@ -45,6 +45,7 @@ interface Metrics {
   intervalVariety: number;
   durationVariety: number;
   archRate: number;
+  shortRate: number;
   travels: number;
   topStrategyShare: number;
   strategyEntropy: number;
@@ -89,16 +90,20 @@ const measure = (engine: PageEngine, answers: Note[][], strategies: string[]): M
     return {
       intervals: steps.length ? new Set(steps).size / steps.length : 0,
       durations: new Set(a.map((n) => n.dur)).size / a.length,
-      arch: a.length > 2 && ((peak > 0 && peak < a.length - 1) || (trough > 0 && trough < a.length - 1)),
+      // a two-note phrase cannot turn inside itself, so it is counted apart
+      short: a.length < 3,
+      arch: (peak > 0 && peak < a.length - 1) || (trough > 0 && trough < a.length - 1),
       travels: a.length > 1 && (a[a.length - 1] as Note).degree !== (a[0] as Note).degree,
     };
   });
+  const longEnough = within.filter((w) => !w.short);
 
   return {
     turns: total,
     intervalVariety: mean(within.map((w) => w.intervals)),
     durationVariety: mean(within.map((w) => w.durations)),
-    archRate: within.filter((w) => w.arch).length / total,
+    archRate: longEnough.length ? longEnough.filter((w) => w.arch).length / longEnough.length : 0,
+    shortRate: within.filter((w) => w.short).length / total,
     travels: within.filter((w) => w.travels).length / total,
     topStrategyShare: Math.max(...Object.values(shares)),
     strategyEntropy: entropy,
@@ -148,7 +153,9 @@ const runSession = async (engine: PageEngine, rank: Ranker, rnd: () => number) =
 
 
 const main = async (): Promise<void> => {
-  const engine = loadPageEngine();
+  // PAGE lets the same harness run an older copy of the page, with the same
+  // seeds, so a change can be compared against what it replaced.
+  const engine = loadPageEngine(process.env.PAGE ?? "web/index.html");
   const { client, mode } = createCaller();
   console.log("auth: " + mode + "   " + SESSIONS + " sessions x " + TURNS + " turns per ranker\n");
 
@@ -187,7 +194,8 @@ const main = async (): Promise<void> => {
     ["-- within one answer --", () => Number.NaN, ""],
     ["interval variety", (m) => m.intervalVariety, "1.00 = every step a different size"],
     ["duration variety", (m) => m.durationVariety, "1.00 = every note a different length"],
-    ["has a turning point", (m) => m.archRate, "the phrase peaks or dips inside itself"],
+    ["turns, of those able to", (m) => m.archRate, "phrases of three notes or more"],
+    ["too short to turn", (m) => m.shortRate, "two notes or fewer"],
     ["ends away from its start", (m) => m.travels, "the phrase goes somewhere"],
   ];
 

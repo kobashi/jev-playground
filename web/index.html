@@ -665,121 +665,174 @@ const contourOf = (notes) => {
   return out;
 };
 
+const snapDur = (v) => Math.max(GRID, Math.min(4, Math.round(v / GRID) * GRID));
+
+/**
+ * Durations for a phrase, taken from the call and varied.
+ *
+ * Measured over whole sessions, answers were using two note lengths and no
+ * more — the thing a listener hears as one flat idea. Each variant bends the
+ * call's own rhythm a different way, and a phrase that still has fewer than
+ * three lengths gets one interior note changed until it does.
+ */
+function shapeRhythm(call, n, i, finalMin) {
+  const src = call.length ? call.map((x) => snapDur(x.dur)) : [0.5, 1];
+  const d = [];
+  for (let k = 0; k < n; k++) d.push(src[k % src.length]);
+
+  switch (i % 5) {
+    case 1: d.reverse(); break;
+    case 2: if (n > 1) { d[0] = snapDur(d[0] * 1.5); d[1] = snapDur(d[1] / 2); } break;
+    case 3: { const at = d.indexOf(Math.max(...d)); if (at >= 0) d[at] = snapDur(d[at] / 2); break; }
+    case 4: if (n > 2) { const at = 1 + (i % (n - 2)); d[at] = snapDur(d[at] * 2); } break;
+    default: break;
+  }
+
+  if (n >= 3 && new Set(d).size < 3) {
+    const at = 1 + (i % (n - 2));
+    d[at] = snapDur(d[at] <= 0.5 ? 1.5 : d[at] / 2);
+  }
+  if (finalMin !== 0) d[n - 1] = Math.max(d[n - 1], finalMin || 1);
+  return d.map(snapDur);
+}
+
+/**
+ * A line that only ever falls, or only ever rises, has nowhere to arrive.
+ * If the highest and lowest notes are both at the ends, push one interior
+ * note past them so the phrase turns somewhere inside itself.
+ */
+function ensureTurn(degrees, i) {
+  if (degrees.length < 3) return degrees;
+  const peak = degrees.indexOf(Math.max(...degrees));
+  const trough = degrees.indexOf(Math.min(...degrees));
+  const inside = (k) => k > 0 && k < degrees.length - 1;
+  if (inside(peak) || inside(trough)) return degrees;
+
+  const out = degrees.slice();
+  const at = 1 + (i % (degrees.length - 2));
+  const reach = 2 + (i % 2);
+  out[at] = clampDeg(out[at] + (degrees[degrees.length - 1] <= degrees[0] ? reach : -reach));
+  return out;
+}
+
+/** Turn a pitch plan into a phrase: give it a turning point, then a rhythm. */
+function build(call, degrees, i, opts) {
+  const settings = opts || {};
+  const shaped = settings.keepContour ? degrees : ensureTurn(degrees, i);
+  const durs = shapeRhythm(call, shaped.length, i, settings.finalMin);
+  return relayout(shaped.map((d, k) => ({ degree: d, dur: durs[k] })));
+}
+
+/**
+ * Each generator supplies an intent as a sequence of pitches. The shaping
+ * above supplies the qualities a phrase needs whatever its intent, so a
+ * strategy is a musical idea rather than a fixed template.
+ */
 const GENERATORS = {
-  /**
-   * Heard you — not a recording. The rhythm and the shape come back, but one
-   * note moves and the ending settles on a chord tone, so it reads as a reply
-   * rather than a tape loop.
-   */
+  /** Heard you — the same shape, one note moved, settled on a chord tone. */
   imitate(call, itp, i) {
     const src = shiftToZero(call);
     if (!src.length) return src;
     const step = [1, -1, 2, -2][i % 4];
+    const degrees = src.map((n) => n.degree);
 
-    if (src.length === 1) {                      // one note deserves more than one note back
-      const d = nearestChordTone(src[0].degree);
-      return relayout([
-        { degree: clampDeg(d + step), dur: 0.5 },
-        { degree: d, dur: Math.max(1, src[0].dur) },
-      ]);
+    if (degrees.length === 1) {
+      return build(call, [clampDeg(degrees[0] + step), nearestChordTone(degrees[0])], i);
     }
-
-    const out = src.map((n) => ({ ...n }));
-    const tail = out[out.length - 1];
-    tail.degree = nearestChordTone(tail.degree);
-    tail.dur = Math.max(tail.dur, 1);
-
-    const at = i % (out.length - 1);              // never the tail, so the snap cannot undo it
-    const moved = clampDeg(out[at].degree + step);
-    out[at].degree = moved === out[at].degree ? clampDeg(out[at].degree - step) : moved;
-    return relayout(out);
+    const at = i % (degrees.length - 1);
+    const moved = clampDeg(degrees[at] + step);
+    degrees[at] = moved === degrees[at] ? clampDeg(degrees[at] - step) : moved;
+    degrees[degrees.length - 1] = nearestChordTone(degrees[degrees.length - 1]);
+    return build(call, degrees, i);
   },
 
+  /**
+   * The same figure, somewhere else. Its contour is the point, so it stays —
+   * but the last note is fitted to the key, the way a tonal sequence adjusts
+   * its ending rather than dangling wherever the transposition lands.
+   */
   sequence(call, itp, i) {
     const shift = [2, -2, 3, -3, 1, -1, 4, -4][i % 8];
-    return shiftToZero(call).map((n) => ({ ...n, degree: clampDeg(n.degree + shift) }));
+    const src = shiftToZero(call);
+    if (!src.length) return src;
+    const degrees = src.map((n) => clampDeg(n.degree + shift));
+    degrees[degrees.length - 1] = nearestChordTone(degrees[degrees.length - 1]);
+    return build(call, degrees, i, { keepContour: true });
   },
 
+  /** Upside down — also a contour with a point to it, and it lands too. */
   invert(call, itp, i) {
     const src = shiftToZero(call);
     if (!src.length) return src;
     const pivot = src[0].degree + (i % 3) - 1;
-    return src.map((n) => ({ ...n, degree: clampDeg(2 * pivot - n.degree) }));
+    const degrees = src.map((n) => clampDeg(2 * pivot - n.degree));
+    degrees[degrees.length - 1] = nearestChordTone(degrees[degrees.length - 1]);
+    return build(call, degrees, i, { keepContour: true });
   },
 
+  /** Pick up the tail and carry it on, by a step pattern that varies. */
   extend(call, itp, i) {
     const src = shiftToZero(call);
     if (!src.length) return src;
     const keep = Math.max(1, Math.ceil(src.length / 2));
-    const out = shiftToZero(src.slice(-keep)).map((n) => ({ ...n }));
-    const step = itp.dir === "falling" ? -1 : 1;
-    let d = out[out.length - 1].degree;
+    const degrees = src.slice(-keep).map((n) => n.degree);
+    const pattern = [[1, 2], [2, 1], [1, 1, 2], [2, 2, 1], [3, 1]][i % 5];
+    const dir = itp.dir === "falling" ? -1 : 1;
+    let d = degrees[degrees.length - 1];
     const add = 2 + (i % 3);
     for (let j = 0; j < add; j++) {
-      d = clampDeg(d + step * (1 + (j % 2)));
-      const last = j === add - 1;
-      out.push({ degree: last ? nearestChordTone(d) : d, dur: last ? 1.5 : 0.5 });
+      d = clampDeg(d + dir * pattern[j % pattern.length]);
+      degrees.push(j === add - 1 ? nearestChordTone(d) : d);
     }
-    return relayout(out);
+    return build(call, degrees, i);
   },
 
-  /**
-   * Something else — but in this call's time. The rhythm is the call's own,
-   * reversed, rather than one of two fixed patterns, so contrast stops
-   * sounding like the same answer to every question.
-   */
+  /** Something else, starting where the call did not leave off. */
   contrast(call, itp, i) {
     const src = shiftToZero(call);
-    const durs = src.length ? src.map((n) => n.dur).slice().reverse() : [0.5, 1];
     const step = itp.dir === "rising" ? -1 : 1;
-    const n = Math.max(2, Math.min(6, durs.length + (i % 2)));
+    const n = Math.max(3, Math.min(6, src.length + (i % 2)));
     let d = clampDeg(itp.lastDeg + step * (2 + (i % 3)));
-    const out = [];
+    const degrees = [];
     for (let j = 0; j < n; j++) {
-      const last = j === n - 1;
-      const dur = durs[j % durs.length];
-      out.push({ degree: last ? nearestChordTone(d) : d, dur: last ? Math.max(1, dur) : dur });
+      degrees.push(j === n - 1 ? nearestChordTone(d) : d);
       d = clampDeg(d + step * (j % 2 ? 2 : 1));
     }
-    return relayout(out);
+    return build(call, degrees, i);
   },
 
   /** Two or three long notes with real silence between them. */
   sparse(call, itp, i) {
     const pool = call.length ? call.map((n) => n.degree) : [0];
     const n = 2 + (i % 2);
+    const lengths = [[1.5, 2], [1, 2.5], [2, 1.5, 2], [1.5, 1, 2]][i % 4];
     const out = [];
     let beat = 0;
     for (let j = 0; j < n; j++) {
       const d = pool[(i + j * 2) % pool.length];
       const last = j === n - 1;
-      const dur = last ? 2 : 1.5;
+      const dur = snapDur(lengths[j % lengths.length]);
       out.push({ degree: clampDeg(last ? nearestChordTone(d) : d), beat, dur });
       beat += dur + 0.5;                          // the half beat between them is silence
     }
     return out;
   },
 
-  /**
-   * A half cadence: the call's own contour, started somewhere else and aimed
-   * at the dominant by step. It asks a question without quoting the call back
-   * verbatim, and it lands on a resting note rather than a dangling one.
-   */
+  /** A half cadence: the call's contour, started elsewhere, aimed at the dominant. */
   question(call, itp, i) {
     const src = shiftToZero(call);
     if (!src.length) return src;
     const intervals = contourOf(src);
     let d = clampDeg(src[0].degree + [2, -2, 3, -3][i % 4]);
-    const out = [];
+    const degrees = [];
     const body = Math.max(1, src.length - 1);
     for (let j = 0; j < body; j++) {
-      out.push({ degree: d, dur: src[j].dur });
-      d = clampDeg(d + (intervals[j] ?? 1));
+      degrees.push(d);
+      d = clampDeg(d + (intervals[j] !== undefined ? intervals[j] : 1));
     }
     const dom = nearestDominant(d);
-    out.push({ degree: clampDeg(dom + (d > dom ? 1 : -1)), dur: 0.5 });
-    out.push({ degree: dom, dur: Math.max(1.5, src[src.length - 1].dur) });
-    return relayout(out);
+    degrees.push(clampDeg(dom + (d > dom ? 1 : -1)), dom);
+    return build(call, degrees, i, { finalMin: 1.5 });   // a half cadence wants weight
   },
 };
 

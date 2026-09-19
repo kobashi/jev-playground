@@ -426,6 +426,40 @@ answer *develops* is what the listening tests actually judged, one answer at a
 time, and that is where the middling numbers are: about half the answers use
 only two note lengths, and about a third never turn around.
 
+### Shaping the phrase instead of the session
+
+The target moved: session variety measures fine, so the work went into whether
+one answer develops. Two things are now guaranteed whatever a strategy is
+trying to say. `shapeRhythm` takes the call's own durations and bends them a
+different way per variant, and adds a third note length to any phrase that has
+only two. `ensureTurn` finds phrases whose highest and lowest notes are both at
+the ends — a line that only rises or only falls — and pushes an interior note
+past them. `sequence` and `invert` keep their contour, since that is their
+point, but their last note is now fitted to the key the way a tonal sequence
+adjusts its ending rather than dangling where the transposition landed.
+
+Six sessions of sixteen turns, the same seeds before and after, measured with
+`PAGE=` pointing the harness at the previous commit:
+
+| | local | Jev |
+| --- | --- | --- |
+| Lands on a chord tone | 74% → **83%** | 77% → **92%** |
+| Turns, of phrases able to | 49% → **73%** | 47% → **60%** |
+| Distinct rhythms | 81% → 86% | 80% → **92%** |
+| Duration variety | 57% → 62% | 53% → 58% |
+| Interval variety | 67% → 73% | 66% → 71% |
+| Largest share held by one strategy | 27% → 25% | 36% → 32% |
+
+Nothing measured moved the wrong way.
+
+One step along the way went the wrong way and the harness caught it: the first
+rewrite dropped resolution from 74% to 61%. Per-strategy rates were unchanged,
+so it was not the generators — the new shapes shifted which strategy the
+rankers chose, towards `sequence` and `invert`, which resolved 35% and 42% of
+the time because they inherited whatever ending the call had. Fitting their
+last note to the key took those to 86% and 84%, and the session figure past
+where it started.
+
 ### What has been verified
 
 `npm run check` covers 44 tests: payload validation, the questions built from
