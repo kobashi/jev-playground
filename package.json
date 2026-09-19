@@ -1,0 +1,26 @@
+{
+  "name": "jev-playground",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experiments and an application built on TypeSafe AI's Jev System One model.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke.ts",
+    "check": "npm run typecheck && npm run test"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}
