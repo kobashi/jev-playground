@@ -383,6 +383,49 @@ What that implies is a generator built by composition rather than by archetype
 independently, so the pool varies continuously instead of offering seven
 shapes. That is untested.
 
+## Measuring a session instead of listening to one
+
+`npm run eval:session` runs the app's own engine — loaded out of `web/index.html`,
+not copied — for sixteen turns and reports what varied. Two modes: `CHAIN=1`
+feeds each answer back as the next call, which is two engines trading, and
+`CHAIN=0` gives every turn a fresh short phrase, which is a person at the
+keyboard.
+
+With human-like calls, four sessions of sixteen turns each:
+
+| | local | Jev |
+| --- | --- | --- |
+| Largest share held by one strategy | 33% | 36% |
+| Distinct shapes | 97% | 95% |
+| Distinct rhythms | 91% | 86% |
+| Lands on a chord tone | 72% | 77% |
+| *Within one answer:* interval variety | 67% | 63% |
+| *Within one answer:* duration variety | **52%** | **52%** |
+| *Within one answer:* has a turning point | **64%** | **61%** |
+| *Within one answer:* ends away from its start | 89% | 95% |
+
+### Two corrections this produced
+
+**There is no monoculture.** The largest share any one strategy holds is 27–36%,
+in every mode tried — chained or fresh calls, no-repeat rule on or off. The
+`extend` 19-of-24 reported earlier was doubly biased: it counted only the
+trials where Jev and the local ranker *disagreed*, which selects against
+whatever they agree on, and the capture harness drove `session.lastStrategy`
+from a stub's random sampling, so the no-repeat rule was not tracking Jev's
+real picks. Neither the diagnosis nor the rewrite it justified rested on what
+the app does.
+
+**Round two's trial set therefore over-represented `extend`.** Its 3–7 result
+is sound as "these extend-heavy answers against the old `question` answers",
+and not sound as "the app now against the app before". The listener was given a
+sample the app would not produce.
+
+**And two different kinds of dull were conflated.** Variety *across* a session
+is what the monoculture story was about, and it measures fine. Whether a single
+answer *develops* is what the listening tests actually judged, one answer at a
+time, and that is where the middling numbers are: about half the answers use
+only two note lengths, and about a third never turn around.
+
 ### What has been verified
 
 `npm run check` covers 44 tests: payload validation, the questions built from
