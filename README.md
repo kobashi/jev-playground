@@ -1,262 +1,142 @@
 # jev-playground
 
-An application built on [Jev](https://typesafe.ai/), TypeSafe AI's first *System One*
-model. Jev does not generate text: it takes a block of state and a set of typed
-questions, evaluates them in parallel, and returns values drawn only from the schema
-you defined, each with calibrated probabilities and a confidence.
+A call-and-response music app built to find out whether [Jev](https://typesafe.ai/)
+— TypeSafe AI's first *System One* model — can carry a musical judgment.
 
-This repository holds the app, the Jev client plumbing, the local server that
-keeps the key out of the browser, a live smoke check, and the tests that cover
-them. It runs privately on loopback and is not deployed anywhere.
+Jev does not generate text. It takes a block of state and a set of typed
+questions, evaluates them in parallel, and returns values drawn only from the
+schema you defined, each with a calibrated probability. So it cannot write a
+melody. The question this repository set out to answer is whether it can
+**choose** one.
 
-## The app
+Everything below was measured. Where a measurement turned out to be wrong, the
+correction is here too — that happened more than once.
 
-`web/index.html` is a call-and-response jam: play a phrase, and a continuation
-comes back. It is one standalone file with no build step and no dependencies —
-Web Audio for sound, Web MIDI when a device is present, and a computer keyboard
-or on-screen pads otherwise.
+## Running it
+
+Node.js 22 or newer. Nothing is deployed; this runs on loopback.
 
 ```sh
 npm install
 npm run serve        # http://127.0.0.1:5173
 ```
 
-`npm run serve` serves the page and the one endpoint it calls, bound to
-127.0.0.1 only. Opening `web/index.html` as a file works too, but then only the
-local engine does — a Jev seat needs the endpoint, and Web MIDI needs
-`localhost` or HTTPS.
-
-### Timing
-
-One transport clock runs for the whole session, starting on the first note.
-Input is quantized against it, so the player and the answer share a grid.
-
-Nothing is computed at the moment the answer is due. `runSpeculation()` rebuilds
-the answer on every note-on and note-off — including notes still held — so a
-finished response is always waiting. When the turn ends, the answer enters on
-the next whole beat, scheduled into the audio clock about 90ms ahead rather than
-played at "now", and notes are handed over on a 180ms lookahead.
-
-The turn ends after half a beat of rest, or at the two-bar line even if the
-player keeps going. Playing again during an answer yields the floor: the
-unscheduled remainder is dropped.
-
-Measured in Chromium, from the last key release to the answer entering: 0.46 to
-1.08 beats, always on the beat. The spread is just where the release fell
-against the grid.
-
-That shape is what makes Jev droppable. `computeResponse()` is already
-awaited, already fired mid-phrase, and already guards against a reply that
-arrives after a newer note, so a 70-500ms round trip hides inside the phrase
-instead of landing in the gap.
-
-### Seats and engines
-
-Two seats trade phrases. Each seat is a person, the local heuristics, or Jev,
-and any combination works: play against either engine, or set both seats to an
-engine and watch them trade with nobody at the keyboard. Only one seat can be a
-person, because there is only one keyboard.
-
-Both engines return the same result shape — candidates, a probability for each,
-a strategy distribution — so the sampling, the readout and the guards are shared.
-Candidates are always generated locally. Jev ranks them; it never writes notes.
-
-| Engine | Where the decision happens |
-| --- | --- |
-| `local` | `interpret()`, `chooseStrategy()` and `rank()` in the page |
-| `jev` | one `systemOne` call behind `POST /api/respond` |
-
-The Jev path sends a pool spanning every strategy and asks one question set:
-did the call come to rest, what is its rhythmic character, which candidate
-answers it best, and are they all broken. Arithmetic the page can do for
-itself — note counts, range, contour, density — is deliberately not asked. A
-strategy's weight then falls out of the answer: it is the probability mass its
-own candidates carry.
-
-If the Jev call fails, that turn falls back to the local engine rather than
-dropping the beat, the failure is shown, and three in a row stop an automatic
-session.
-
-### Keeping an automatic session finite
-
-Two engines answering each other will loop given the chance, so the session is
-bounded from several directions at once:
-
-| Guard | Limit |
-| --- | --- |
-| Exchanges per session | 16 |
-| Engine calls per session | 48 |
-| Speculations per human turn (Jev) | 6 |
-| Consecutive engine failures | 3 |
-| Cycle rescues before stopping | 3 |
-| Hidden tab | stops the session |
-
-Cycle detection is the one that matters musically. Every phrase is reduced to a
-signature; if the sampled answer repeats anything from the last six phrases,
-the sampler walks down the probabilities for one that does not. That rescue is
-allowed three times, and a session where *every* candidate repeats stops
-immediately — that is the fixed point where one engine copies the other forever.
-
-Verified two ways: 3000 simulated sessions in Node, every one terminating with a
-reason (worst case 17 iterations, 16 engine calls), and a real local-vs-local
-session in Chromium that ran to the 16-exchange cap and stopped by itself with
-no page errors.
-
-## Running it privately
-
-This is not deployed anywhere and is not meant to be. The deciding constraint is
-that the Jev API key cannot reach the browser, so a seat set to Jev needs
-something server side; `npm run serve` is that something, on loopback.
+Opening `web/index.html` as a file works for the local engine, but a Jev seat
+needs the endpoint, and Web MIDI needs `localhost` or HTTPS.
 
 **`/api/respond` has no authentication.** On loopback that is fine. Exposed, it
-would let anyone spend the account's Jev budget — at roughly 3 KB of JSON per
-call, a trial balance goes quickly. Do not put this behind a tunnel or a public
-port without putting real access control in front of it first.
+would let anyone spend the account's Jev budget at roughly 2,200 input tokens a
+call. Put access control in front of it before it leaves your machine.
 
 ### Where the key lives
 
-`createCaller()` picks a route from what the environment offers, and says which
-one it took at startup:
+`createCaller()` picks a route from what the environment offers and says which
+at startup:
 
 | Route | When | How it authenticates |
 | --- | --- | --- |
 | `key` | `TYPESAFE_API_KEY` is set | the SDK sends `Authorization: Bearer …` |
 | `proxy` | no key present | nothing is sent; an agent proxy attaches the credential after the request leaves |
 
-The proxy route exists for Claude Code cloud environments, which can hold an
-API credential that never enters the sandbox. Sending a placeholder
-`Authorization` header there risks colliding with the one the proxy adds, so
-`createProxyClient` deliberately sends none — and a test asserts that.
+The proxy route exists for Claude Code cloud environments, which hold an API
+credential that never enters the sandbox. Sending a placeholder `Authorization`
+header there risks colliding with the one the proxy adds, so `createProxyClient`
+sends none, and a test asserts it. On a development machine, put the key in
+`.env` instead (gitignored).
 
-On a development machine, put the key in `.env` instead (it is gitignored):
+One trap: **Node's built-in `fetch` ignores `HTTPS_PROXY` unless told to read
+it**, so in a sandbox that routes egress through a proxy the call fails with the
+proxy's own 403 while `curl` to the same host succeeds. Every script here sets
+`NODE_USE_ENV_PROXY=1`, which is inert where no proxy is configured.
 
-```sh
-cp .env.example .env     # then fill in TYPESAFE_API_KEY
-npm run serve
-```
+## How the app works
 
-### Node and an HTTP proxy
+Two seats trade phrases. Each seat is a person, the local heuristics, or Jev,
+and any combination works — including two engines trading with nobody at the
+keyboard. Only one seat can be a person, because there is one keyboard.
 
-Node's built-in `fetch` ignores `HTTPS_PROXY` unless told to read it, so in a
-sandbox that routes egress through a proxy the call fails with the proxy's own
-403 while `curl` to the same host succeeds. `npm run smoke` and `npm run serve`
-therefore set `NODE_USE_ENV_PROXY=1` (Node 22.21 or newer). It does nothing
-where no proxy variables are set, so it is safe on a development machine.
+**Timing.** One transport clock runs for the whole session. Input is quantized
+against it, and nothing is computed when an answer is due: the answer is
+rebuilt on every note-on and note-off, including notes still held, so a
+finished response is always waiting. It enters on the next whole beat,
+scheduled into the audio clock about 90ms ahead. Measured from the last key
+release to the answer entering: 0.46 to 1.08 beats, always on the beat.
 
-### Measured against the live API
+That shape is what makes Jev droppable. A 264–287ms round trip hides inside the
+phrase instead of landing in the gap.
 
-One turn with a Jev seat, taken from three rounds through the real page:
+**Both engines return the same result shape** — candidates, a probability for
+each, a strategy distribution — so sampling, the readout and the guards are
+shared. Candidates are always generated locally. Jev ranks them; it never
+writes notes. A failed Jev call falls back to the local engine for that turn
+and says so.
 
-| | |
-| --- | --- |
-| Input tokens per turn | about **2,200** with pitch names |
-| Latency | 742ms cold, then **264–287ms** |
-| Model | `jev-latest` resolves to `jev-1.13.0` |
+**An automatic session always ends.** Sixteen exchanges, 48 engine calls, six
+speculations per human turn, three consecutive failures, a hidden tab. The
+musical guard is cycle detection: every phrase is reduced to a signature, and
+an answer repeating anything from the last six phrases sends the sampler down
+the probabilities for one that does not. Three rescues, then it stops; a pool
+where every candidate repeats stops at once. Verified two ways — 3000 simulated
+sessions in Node, all terminating with a reason, and a real local-vs-local
+session in Chromium that ran to the cap and stopped by itself.
 
-At $0.042 per million input tokens and no charge for output, a turn costs about
-$0.000085, so a $5 trial balance is roughly 58,000 turns, or 1,200 automatic
-sessions at the 48-call cap. Cost is not the constraint here.
+## What we learned about Jev
 
-`jev-preview` also exists, described as "should be better in most ways". Set
-`TYPESAFE_DEFAULT_MODEL` to try it.
+### It reads symbolic music
 
-One thing the live runs surfaced: `all_broken` came back at **0.41–0.44** every
-round. Jev is not confident the local generator's pool contains a good answer.
-That is a finding about the generator, not the plumbing, and it is what the
-eval should look into first.
+This was the open question the project started with, and it is settled. Asked
+which way a phrase travels between its first note and its last — arithmetic, so
+a model that cannot do it is not reading the notes — Jev scores **97–100%**
+whichever way the notes are written.
 
-## The eval
+### How you write the notes changes what it hears
 
-`npm run eval` asks Jev about items whose answer is known by construction, in
-three encodings of the same phrases. 126 requests, 96k input tokens, $0.004,
-under ten seconds.
+The same phrases, in three encodings, 126 requests:
 
-Direction is the control: which way a phrase travels is arithmetic, so a model
-that cannot do it is not reading the notes. Cadence and ranking are the
-judgments the app leans on.
+| Encoding | Direction | Cadence | p(ended): closed vs open | Ranking |
+| --- | --- | --- | --- | --- |
+| `degree` — `{degree: 7}` | 97% | **63%** | 0.67 vs 0.47 | 100% |
+| `named` — `{note: "C5"}` | 100% | **97%** | 0.83 vs 0.33 | 100% |
+| `abc` — `K:C  C2 D2 E4` | 97% | 77% | 0.66 vs 0.41 | 100% |
 
-| Encoding | Direction | Cadence | p(ended): closed vs open | Ranking | p(good) |
-| --- | --- | --- | --- | --- | --- |
-| `degree` — `{degree: 7}` | 97% | **63%** | 0.67 vs 0.47 | 100% | 0.86 |
-| `named` — `{note: "C5"}` | 100% | **97%** | 0.83 vs 0.33 | 100% | 0.84 |
-| `abc` — `K:C  C2 D2 E4` | 97% | 77% | 0.66 vs 0.41 | 100% | 0.66 |
+A 34-point swing on the judgment the app depends on. Every failure the degree
+encoding made on a closed phrase was a phrase ending on degree 7 — the tonic an
+octave up, which `7` hides behind a large number and `C5` does not. Its
+0.67-against-0.47 separation is barely a signal.
 
-**Jev reads symbolic music.** Direction is 97–100% whichever way the notes are
-written, so the open question the project started with is settled.
+**The app sends pitch names because of this.** The conversion happens server
+side; the browser's wire format is unchanged.
 
-**The encoding decides whether it hears a cadence.** Every one of the five
-failures that the degree encoding made on closed phrases was a phrase ending on
-degree 7 — the tonic an octave up, which `7` hides behind a large number and
-`C5` does not. The degree encoding also called five open phrases finished. Its
-0.67-vs-0.47 separation is barely a signal; `named` separates 0.83 from 0.33.
-The app sends pitch names because of this.
+### It is sure about constraints and unsure about conversation
 
-**Ranking is solid in any encoding.** A musically sensible answer was picked
-over five degenerate ones 12 times out of 12, in all three encodings.
+Pairs of answers that would both pass a glance, differing in exactly one
+musical principle, each asked twice with the candidates swapped:
 
-**`all_broken` is not usable as a quality gate.** It sits at 0.41 in every
-encoding — including the runs where Jev had just chosen the good candidate with
-0.86 probability. It says "these are all broken" and "this one is good" at the
-same time, so it is measuring something other than what its wording asks. The
-app still displays the number, and it should not be trusted until the question
-is reworded and re-tested.
+| Dimension | Picked the better one | p(better) |
+| --- | --- | --- |
+| Note outside the key | 100% | 0.99 |
+| Register continuity | 100% | 0.94 |
+| Falls on the beat | 100% | 0.85 |
+| Resolves the cadence | 100% | 0.83 |
+| Moves by step, not leap | 100% | 0.78 |
+| Length matches the call | 92% | 0.65 |
+| **Echoes the call's shape** | **75%** | **0.64** |
 
-## Telling two plausible answers apart
+94% overall, with label `a` chosen exactly 50% of the time. Key, register and
+timing are near-certainties. Whether an answer takes up the shape the call just
+made is its weakest dimension — and that is the one that makes a trade feel
+like a reply.
 
-The first eval put one sensible answer against five degenerate ones, and Jev won
-12 out of 12. That is a low bar. `npm run eval:pairs` raises it: two answers
-that would both pass a glance, differing in exactly one musical principle, each
-pair asked twice with the candidates swapped.
+### It does not invent confidence
 
-| Dimension | Picked the better one | p(better) | Both orders agree |
-| --- | --- | --- | --- |
-| Note outside the key | 100% | 0.99 | 4/4 |
-| Register continuity | 100% | 0.94 | 4/4 |
-| Falls on the beat | 100% | 0.85 | 4/4 |
-| Resolves the cadence | 100% | 0.83 | 4/4 |
-| Moves by step, not leap | 100% | 0.78 | 4/4 |
-| Length matches the call | 92% | 0.65 | 5/6 |
-| Echoes the call's shape | 75% | 0.64 | 4/6 |
-| **Overall** | **94%** | **0.79** | |
+Four of those pairs hold two answers that are both fine. There Jev lands 0.15
+from an even split, at 0.31 confidence. Asked something with no right answer,
+it says so. For a judge, that matters as much as the scores.
 
-72 requests, $0.002. Label `a` was chosen exactly 50% of the time, so there is
-no order bias to discount.
+### On a real pool it chooses — but not the same thing
 
-**The controls matter as much as the scores.** Four pairs hold two answers that
-are both fine. There Jev lands 0.15 from an even split, at 0.31 confidence — it
-does not manufacture a preference when there is nothing to prefer.
-
-**Jev is surest about constraints and least sure about conversation.** Key,
-register and timing are near-certainties. Whether an answer takes up the shape
-the call just made is its weakest dimension, and that is the one that makes a
-trade feel like a reply rather than a turn.
-
-### A test that measured the wrong thing
-
-The first run of this eval scored motif at 25% — worse than chance — and length
-at 63%. Both were artefacts. The unrelated answers happened to be smooth
-stepwise lines, and the over-long ones happened to be well-shaped scalar
-arches: exactly what Jev independently prefers at 100%. The comparison was
-varying two things and attributing the result to one.
-
-Rebuilt so that only one property differs — the over-long answer is now the
-good one repeated verbatim, and the unrelated answer carries the same interval
-sizes as the related one — the same questions score 92% and 75%, and the
-overall figure moves from 84% to 94%.
-
-### What this means for the app
-
-The generator already guarantees the properties Jev is certain about: every
-candidate is in key by construction, quantized to the grid, clamped in
-register, and close to the call in length. So those dimensions do not separate
-anything in a real pool, and Jev is left working in its weakest regime.
-
-### What Jev is worth on a real pool
-
-Ten pools were captured from the running app — the calls a person actually
-plays, and the fourteen-odd candidates the generator actually builds — then put
-to Jev and to the local ranker side by side. No ground truth is needed to ask
-whether Jev is choosing at all, or agreeing with what is already there.
+Ten pools captured from the running app, put to Jev and to the local ranker
+side by side:
 
 | | max p(top pick) | Normalised entropy |
 | --- | --- | --- |
@@ -264,182 +144,69 @@ whether Jev is choosing at all, or agreeing with what is already there.
 | Local ranker | 0.248 | 0.843 |
 | Indifference | 0.072 | 1.000 |
 
-**Jev is choosing.** Three times the mass of an even split across fourteen
-candidates, consistently: 0.19 to 0.30 on every pool. Not indifferent.
+Three times the mass of an even split across fourteen candidates, consistently.
+But top-pick agreement is **1 in 10**, and the rank correlation is **0.21**. Two
+rankers, both making a real choice, on nearly unrelated grounds.
 
-**It is not choosing the same thing.** Top-pick agreement is 1 in 10, and the
-rank correlation between the two orderings is 0.21. Two rankers, both making a
-real choice, on nearly unrelated grounds. Putting a seat on Jev is not a
-refinement of the heuristic; it is a different opinion.
+The softness is a feature here: the app samples from the distribution rather
+than taking the argmax, so a soft preference gives variety while still tilting.
 
-**Jev has a marked preference for the answer that throws it back.** Its top
-pick was a `question` candidate 6 times out of 10, where the local ranker
-spread across `extend`, `imitate` and `sequence`. One likely reason: the
-`question` generator keeps the first three or four notes of the call verbatim
-before its final unresolved note, so it is the most literally related answer in
-the pool, and relatedness is what the question asks for. That is a hypothesis
-this test does not settle.
+### What it costs
 
-That entropy is worth keeping. The app samples from the distribution rather
-than taking the argmax, so a soft preference gives variety while still tilting
-— which is what was wanted.
+`jev-latest` resolves to `jev-1.13.0`. About **2,200 input tokens** a turn at
+$0.042 per million, output not charged — roughly **$0.000092 a turn**, so a $5
+trial balance is around 54,000 turns. Latency 742ms cold, then 264–287ms. The
+whole encoding eval was 126 requests for $0.004.
 
-**Whether Jev's choice sounds better is not something these numbers can say.**
-Both rankers are decisive, they disagree, and there is no ground truth for
-"more musical". That question is now a listening test, not a measurement.
+`jev-preview` also exists, described as "should be better in most ways".
+Untested here.
 
-One caveat on method: the local ranker normally receives the single strategy it
-generated for, and here it was given the whole mixed pool, which changes one of
-its penalty terms.
+### One question that does not work
 
-## The listening test, and what it changed
+`all_broken` — "are all of these candidates broken?" — sits at 0.41 in every
+encoding, including the runs where Jev had just chosen the good candidate with
+0.86 probability. It says "these are all broken" and "this one is good" at the
+same time, so it is measuring something other than what its wording asks. The
+app still displays it. Do not trust it.
 
-27 real calls, each with the answer Jev picked and the answer the local ranker
-picked, judged blind on a phone. The tally was **local 15, Jev 11, one tie** —
-no meaningful difference over 26 decisive trials. The words that came back with
-it were worth more than the count:
+## What we learned about the app
 
-> Jev's lack resolution, and the development is dull. The local ones repeat the
-> same kind of development.
+### The ranker was never the bottleneck
 
-Both complaints were traceable to the generator, and the tally agreed:
+Three listening tests, all blind, all on the phone:
 
-| Jev's pick was | Won | Lost |
-| --- | --- | --- |
-| `question` | 5 | 9 |
-| `imitate` | 2 | 4 |
-| `extend` | 3 | 2 (one tie) |
+| | |
+| --- | --- |
+| Round 1 — Jev vs local, 27 trials | local 15, Jev 11, one tie |
+| Round 2 — Jev vs local, 12 trials | local 6, Jev 4, two ties |
+| Round 3 — new code vs old, 8 trials | 4 — 4 |
 
-`question` and `imitate` were 20 of Jev's 27 picks and won 7 of them. Both were
-echoes: `question` kept the call's first three or four notes verbatim and added
-one dangling note, and `imitate` returned the call nearly unchanged. That is
-exactly "dull, and unresolved". Meanwhile `contrast` — 15 of the local ranker's
-27 picks — chose between two hardcoded rhythms, so its answers all sounded
-alike.
+Jev's judgment is measurably sound and its choices differ measurably from the
+heuristic's, and **none of that reaches the listener**. The candidate pool is
+what decides how the app sounds.
 
-### Three fixes
+### Two complaints, translated into metrics
 
-**The generators stopped echoing.** `question` now takes the call's interval
-sequence, starts it somewhere else, and aims the last two notes at the dominant
-by step: a half cadence that asks without quoting, and rests without dangling.
-`imitate` keeps the rhythm but moves a note and settles the ending on a chord
-tone. `contrast` builds its rhythm from the call's own durations, reversed,
-instead of picking from a list of two. Measured over 400 calls: verbatim
-three-note quotes went from being the whole design to 0 of 1200, contrast went
-from 2 rhythms to 288, and `imitate` never returns the call unchanged.
+The most useful information in the project came in two phrases after round one:
+*the answers lack resolution, and the development is dull.* No measurement had
+produced anything that actionable. Both turned out to be measurable after the
+fact:
 
-**A landed call is no longer answered with a question,** and the strategy just
-played is dropped from the next pool, so nobody says the same thing twice
-running. A question follows an open call 14% of the time and a landed one 6%.
+- lack of resolution → the share of answers ending on a chord tone
+- dull development → note-length variety within a phrase, and whether the
+  phrase turns around inside itself instead of running one way
 
-**The ranking question asked for the wrong thing.** It said the answer "should
-relate to what the call did" — and relatedness was the only free variable,
-since the pool already guarantees key, register, grid and length. So Jev
-maximised similarity, and fixing the generators just moved it from one echo to
-another: `question` 14/27, then `imitate` 19/28. Reworded to ask for a reply
-that "picks up what the call did and carries it forward, rather than restating
-it", and to say outright that a near-copy is a weak reply, Jev moved to
-`extend` — 19 of 24, with `imitate` down to 1. `extend` was the one strategy
-Jev won on in the listening test.
+`npm run eval:session` reports both without anyone listening.
 
-One caveat on that last measurement: the pools were captured against a stub, so
-the no-repeat rule was not tracking Jev's real previous pick. In play it
-excludes the strategy just used, so consecutive turns cannot both be `extend`.
+### What the reshaping moved
 
-### Round two: the fix did not work
+`shapeRhythm` takes the call's own durations, bends them a different way per
+variant, and gives a third note length to any phrase left with two.
+`ensureTurn` finds phrases whose highest and lowest notes are both at the ends
+and pushes an interior note past them. `sequence` and `invert` keep their
+contour, which is their point, but their last note is fitted to the key.
 
-24 more blind trials, half comparing the two rankers on the fixed system and
-half comparing, for the same call, the answer the fixed system gives against
-the answer the old one gave.
-
-| | | |
-| --- | --- | --- |
-| Jev vs local | 4 — 6 | two ties; round one was 11 — 15, so unchanged |
-| **New answer vs old answer** | **3 — 7** | **two ties** |
-
-Option A was chosen in 11 of 20 decisive trials, so this is not a position
-artefact. Ten of the twelve new answers were `extend`, and against the old
-dangling `question` it went 3 won, 5 lost, 2 tied.
-
-So the rewrite traded a `question` monoculture for an `extend` monoculture, and
-the listener likes it no better. The reasoning that led there was wrong: round
-one showed `extend` winning 3–2–1, but that was `extend` against the local
-ranker's `contrast` and `invert` picks, on a handful of trials. It said nothing
-about how `extend` holds up as the entire diet, and nothing about how it
-compares to `question`.
-
-### Why ranking cannot fix this
-
-The pool is seven fixed templates, two variants each. A ranker can only choose
-which template is heard, so whichever template it favours becomes the whole
-output, and the listener stops hearing an answer and starts hearing the
-template. Every measurement pointed at this and it took two rounds to read it:
-the pair eval found Jev near-certain about key, register, timing and line, and
-a real pool holds all four constant by construction, so Jev arrives with
-nothing to use.
-
-What that implies is a generator built by composition rather than by archetype
-— a pitch transform, a rhythm transform, a cadence and a density chosen
-independently, so the pool varies continuously instead of offering seven
-shapes. That is untested.
-
-## Measuring a session instead of listening to one
-
-`npm run eval:session` runs the app's own engine — loaded out of `web/index.html`,
-not copied — for sixteen turns and reports what varied. Two modes: `CHAIN=1`
-feeds each answer back as the next call, which is two engines trading, and
-`CHAIN=0` gives every turn a fresh short phrase, which is a person at the
-keyboard.
-
-With human-like calls, four sessions of sixteen turns each:
-
-| | local | Jev |
-| --- | --- | --- |
-| Largest share held by one strategy | 33% | 36% |
-| Distinct shapes | 97% | 95% |
-| Distinct rhythms | 91% | 86% |
-| Lands on a chord tone | 72% | 77% |
-| *Within one answer:* interval variety | 67% | 63% |
-| *Within one answer:* duration variety | **52%** | **52%** |
-| *Within one answer:* has a turning point | **64%** | **61%** |
-| *Within one answer:* ends away from its start | 89% | 95% |
-
-### Two corrections this produced
-
-**There is no monoculture.** The largest share any one strategy holds is 27–36%,
-in every mode tried — chained or fresh calls, no-repeat rule on or off. The
-`extend` 19-of-24 reported earlier was doubly biased: it counted only the
-trials where Jev and the local ranker *disagreed*, which selects against
-whatever they agree on, and the capture harness drove `session.lastStrategy`
-from a stub's random sampling, so the no-repeat rule was not tracking Jev's
-real picks. Neither the diagnosis nor the rewrite it justified rested on what
-the app does.
-
-**Round two's trial set therefore over-represented `extend`.** Its 3–7 result
-is sound as "these extend-heavy answers against the old `question` answers",
-and not sound as "the app now against the app before". The listener was given a
-sample the app would not produce.
-
-**And two different kinds of dull were conflated.** Variety *across* a session
-is what the monoculture story was about, and it measures fine. Whether a single
-answer *develops* is what the listening tests actually judged, one answer at a
-time, and that is where the middling numbers are: about half the answers use
-only two note lengths, and about a third never turn around.
-
-### Shaping the phrase instead of the session
-
-The target moved: session variety measures fine, so the work went into whether
-one answer develops. Two things are now guaranteed whatever a strategy is
-trying to say. `shapeRhythm` takes the call's own durations and bends them a
-different way per variant, and adds a third note length to any phrase that has
-only two. `ensureTurn` finds phrases whose highest and lowest notes are both at
-the ends — a line that only rises or only falls — and pushes an interior note
-past them. `sequence` and `invert` keep their contour, since that is their
-point, but their last note is now fitted to the key the way a tonal sequence
-adjusts its ending rather than dangling where the transposition landed.
-
-Six sessions of sixteen turns, the same seeds before and after, measured with
-`PAGE=` pointing the harness at the previous commit:
+Six sessions of sixteen turns, the same seeds either side:
 
 | | local | Jev |
 | --- | --- | --- |
@@ -448,29 +215,77 @@ Six sessions of sixteen turns, the same seeds before and after, measured with
 | Distinct rhythms | 81% → 86% | 80% → **92%** |
 | Duration variety | 57% → 62% | 53% → 58% |
 | Interval variety | 67% → 73% | 66% → 71% |
-| Largest share held by one strategy | 27% → 25% | 36% → 32% |
 
-Nothing measured moved the wrong way.
+Nothing moved the wrong way — and round three could not hear the difference.
+Eight trials cannot resolve a change this size; that was a design error, not a
+result.
 
-One step along the way went the wrong way and the harness caught it: the first
-rewrite dropped resolution from 74% to 61%. Per-strategy rates were unchanged,
-so it was not the generators — the new shapes shifted which strategy the
-rankers chose, towards `sequence` and `invert`, which resolved 35% and 42% of
-the time because they inherited whatever ending the call had. Fitting their
-last note to the key took those to 86% and 84%, and the session figure past
-where it started.
+## The instruments
 
-### What has been verified
+| Command | Answers |
+| --- | --- |
+| `npm run smoke` | is the API reachable and answering |
+| `npm run eval` | does Jev read symbolic music, and does the encoding matter |
+| `npm run eval:pairs` | can it tell two plausible answers apart, one principle at a time |
+| `npm run eval:session` | does a session stay interesting — `CHAIN=0/1`, `PAGE=` for an older build |
+| `npm run eval:ab` | build a listening test: the same calls through two versions |
+| `npm run check` | 46 unit tests and a typecheck |
 
-`npm run check` covers 44 tests: payload validation, the questions built from
-it, the proxy client's headers, and the server's routes and failure paths.
+`eval/page-engine.ts` loads the app's own engine out of `web/index.html` rather
+than copying it, so an eval measures the code that runs.
 
-Beyond that, the whole chain has been run end to end against a stand-in for
-`api.typesafe.ai`: the real server in proxy mode, the real page in Chromium with
-a Jev seat, one request reaching the upstream on `/v1/systemone` carrying four
-questions and fourteen candidates, **no `Authorization` header on it**, and the
-answer arriving back in the readout with the upstream's token count.
+## What did not work
 
-The real API has now been called too: the smoke check answers correctly
-(`billing` at confidence 1.000 on a double-charge complaint), and three rounds
-through the real page were answered by Jev with no fallback and no page errors.
+Kept because the wrong turns cost more than the right ones, and they have a
+shape worth recognising.
+
+**Reading a number without checking what it measures.** `all_broken` at 0.41
+was read as "the generator's candidates are weak". It was the question's
+wording. One eval run settled it.
+
+**Generalising from six trials.** Round one showed `extend` at 3–2–1, so the
+ranking question was rewritten to steer towards it. Those six trials were
+`extend` against the local ranker's picks; they said nothing about `extend` as
+the whole diet. Round two: the rewrite was no better.
+
+**A harness that biased what it captured.** The "monoculture" that justified two
+commits was an artefact. The capture kept only trials where the two rankers
+disagreed, which selects against agreement, and drove the no-repeat rule from a
+stub's random sampling instead of real picks. Measured properly, the largest
+share any one strategy holds is 27–36% — in every mode. There was no
+monoculture, and round two's trial set inherited the bias.
+
+**Conflating two kinds of dull.** Variety across a session is not the same as
+whether one answer develops. The listening tests judged one answer at a time;
+the monoculture story was about the other thing entirely.
+
+**Optimising a proxy past its usefulness.** The turning-point metric stalled at
+63%, and the remaining shortfall was `sequence` and `invert` deliberately
+keeping their contour. Forcing a turn there would have broken what makes them
+sequences.
+
+**A test too small to answer its question.** Round three used eight trials to
+save the listener's time, and eight trials cannot detect a difference this
+size. The 4–4 means "not measured", not "no difference".
+
+The pattern in all of them: a number was read as evidence for something it did
+not measure. What broke the cycle was building the measuring instrument before
+the next change, and running the previous build through the same harness with
+the same seeds.
+
+## Where it stands
+
+The app works, privately, on loopback and as a page. Either seat can be a
+person, the local heuristics, or Jev. Automatic sessions always end.
+
+What is still open:
+
+- **Whether a better pool would let Jev's judgment through.** Every finding
+  points here. The generator offers seven templates, and a real pool holds
+  constant every dimension Jev is certain about, so it arrives with nothing to
+  use. A generator built by composition rather than archetype is the untested
+  alternative — but that is a question about composition algorithms, not about
+  Jev.
+- **Whether `all_broken` can be reworded into something usable.**
+- **Whether `jev-preview` scores differently.** The evals here would run against
+  it unchanged.
