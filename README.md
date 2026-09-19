@@ -12,6 +12,14 @@ melody. The question this repository set out to answer is whether it can
 Everything below was measured. Where a measurement turned out to be wrong, the
 correction is here too — that happened more than once.
 
+## Try it without cloning
+
+- **[Trade Fours](https://claude.ai/artifact/PHX9eSLqJpPiaf6TKaEnMx)** — the app,
+  playable in a browser. A published page has no backend, so this is the local
+  engine only: the Jev seat needs `npm run serve` and a key.
+- **[Jev Reads Music](https://claude.ai/artifact/LvQXvM5HPn3UVUwzMZwb7w)** — the
+  findings, with the numbers behind them.
+
 ## Running it
 
 Node.js 22 or newer. Nothing is deployed; this runs on loopback.
