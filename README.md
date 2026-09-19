@@ -251,11 +251,46 @@ candidate is in key by construction, quantized to the grid, clamped in
 register, and close to the call in length. So those dimensions do not separate
 anything in a real pool, and Jev is left working in its weakest regime.
 
-What that is worth is not yet measured. The test to run next does not need
-ground truth: take real pools from the running app, and look at how much
-probability mass Jev puts on its top pick and how often it agrees with the
-local ranker. A near-uniform distribution over fourteen candidates would mean
-it is adding little there, whatever it scores on constructed pairs.
+### What Jev is worth on a real pool
+
+Ten pools were captured from the running app — the calls a person actually
+plays, and the fourteen-odd candidates the generator actually builds — then put
+to Jev and to the local ranker side by side. No ground truth is needed to ask
+whether Jev is choosing at all, or agreeing with what is already there.
+
+| | max p(top pick) | Normalised entropy |
+| --- | --- | --- |
+| Jev | 0.222 | 0.845 |
+| Local ranker | 0.248 | 0.843 |
+| Indifference | 0.072 | 1.000 |
+
+**Jev is choosing.** Three times the mass of an even split across fourteen
+candidates, consistently: 0.19 to 0.30 on every pool. Not indifferent.
+
+**It is not choosing the same thing.** Top-pick agreement is 1 in 10, and the
+rank correlation between the two orderings is 0.21. Two rankers, both making a
+real choice, on nearly unrelated grounds. Putting a seat on Jev is not a
+refinement of the heuristic; it is a different opinion.
+
+**Jev has a marked preference for the answer that throws it back.** Its top
+pick was a `question` candidate 6 times out of 10, where the local ranker
+spread across `extend`, `imitate` and `sequence`. One likely reason: the
+`question` generator keeps the first three or four notes of the call verbatim
+before its final unresolved note, so it is the most literally related answer in
+the pool, and relatedness is what the question asks for. That is a hypothesis
+this test does not settle.
+
+That entropy is worth keeping. The app samples from the distribution rather
+than taking the argmax, so a soft preference gives variety while still tilting
+— which is what was wanted.
+
+**Whether Jev's choice sounds better is not something these numbers can say.**
+Both rankers are decisive, they disagree, and there is no ground truth for
+"more musical". That question is now a listening test, not a measurement.
+
+One caveat on method: the local ranker normally receives the single strategy it
+generated for, and here it was given the whole mixed pool, which changes one of
+its penalty terms.
 
 ### What has been verified
 
