@@ -82,6 +82,12 @@ export const createApp = (client: SystemOneCaller, webRoot: string): Server => {
   return createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
 
+    // lets the page tell a running server from a static host; never calls the model
+    if (url.pathname === "/api/status" && (req.method === "GET" || req.method === "HEAD")) {
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
     if (url.pathname === "/api/respond") {
       if (req.method !== "POST") { sendJson(res, 405, { error: "Use POST." }); return; }
       void (async () => {

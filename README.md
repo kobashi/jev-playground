@@ -14,9 +14,11 @@ correction is here too — that happened more than once.
 
 ## Try it without cloning
 
-- **[Trade Fours](https://claude.ai/artifact/PHX9eSLqJpPiaf6TKaEnMx)** — the app,
-  playable in a browser. A published page has no backend, so this is the local
-  engine only: the Jev seat needs `npm run serve` and a key.
+- **[The app on GitHub Pages](https://kobashi.github.io/jev-playground/)** — also as
+  **[Trade Fours](https://claude.ai/artifact/PHX9eSLqJpPiaf6TKaEnMx)**. Either copy is
+  a static page: no server, so no key anywhere, and the local engine only. The page
+  asks `/api/status` on load and turns the Jev seat off when nothing answers; the
+  seat needs `npm run serve` and a key.
 - **[Jev Reads Music](https://claude.ai/artifact/LvQXvM5HPn3UVUwzMZwb7w)** — the
   findings, with the numbers behind them.
 
@@ -30,7 +32,11 @@ npm run serve        # http://127.0.0.1:5173
 ```
 
 Opening `web/index.html` as a file works for the local engine, but a Jev seat
-needs the endpoint, and Web MIDI needs `localhost` or HTTPS.
+needs the endpoint (the page disables it when `/api/status` is missing), and Web
+MIDI needs `localhost` or HTTPS.
+
+`.github/workflows/pages.yml` publishes `web/` to GitHub Pages on each push that
+touches it. It holds no secret and deploys no server.
 
 **`/api/respond` has no authentication.** On loopback that is fine. Exposed, it
 would let anyone spend the account's Jev budget at roughly 2,200 input tokens a

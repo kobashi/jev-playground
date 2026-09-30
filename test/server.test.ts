@@ -76,6 +76,14 @@ describe("the local server", () => {
     expect(((await res.json()) as { error: string }).error).toMatch(/not valid JSON/);
   });
 
+  it("reports itself on the status route without calling the model", async () => {
+    const before = seen.length;
+    const res = await fetch(base + "/api/status");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(seen.length).toBe(before);
+  });
+
   it("refuses anything but POST on the endpoint", async () => {
     const res = await fetch(base + "/api/respond");
     expect(res.status).toBe(405);

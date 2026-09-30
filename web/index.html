@@ -930,6 +930,7 @@ const SEATS = {
 };
 
 const JEV_ENDPOINT = "/api/respond";
+const JEV_STATUS = "/api/status";
 const JEV_TIMEOUT_MS = 5000;
 const JEV_POOL_PER_STRATEGY = 2;
 const JEV_POOL_MAX = 20;
@@ -1777,6 +1778,27 @@ function midiToDegree(note) {
   return best;
 }
 
+/**
+ * Jev needs the local server. A static copy (Pages, an artifact, a file) has no
+ * endpoint and no key, so the seat is offered only when the server answers.
+ */
+async function probeJev() {
+  let ok = false;
+  try {
+    const res = await fetch(JEV_STATUS, { cache: "no-store", signal: AbortSignal.timeout(3000) });
+    ok = res.ok && (await res.json()).ok === true;
+  } catch (e) { /* no server behind this page */ }
+  if (ok) return;
+  [0, 1].forEach((i) => {
+    const opt = $("#seat" + i).querySelector('option[value="jev"]');
+    opt.disabled = true;
+    opt.textContent = "Jev（要ローカルサーバー）";
+    if (session.seats[i] === "jev") setSeat(i, "local");
+  });
+  showBanner("このページには Jev を呼ぶサーバーがありません。ローカルエンジンで遊べます。" +
+    "Jev の席はリポジトリを clone して npm run serve で起動したときに使えます。", false);
+}
+
 async function initMidi() {
   if (!navigator.requestMIDIAccess) return;
   try {
@@ -1881,6 +1903,7 @@ setStatus("例を表示中 — 弾くと差し替わります", null);
 setInterval(tick, 25);
 requestAnimationFrame(frame);
 initMidi();
+probeJev();
 
 })();
 
